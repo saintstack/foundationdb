@@ -1496,8 +1496,8 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					// Remove old dests from serverKeys.
 					for (const UID& destId : oldDests) {
 						if (std::find(servers.begin(), servers.end(), destId) == servers.end()) {
-							actors.push_back(
-							    unassignServerKeys(&(tr->getTransaction()), destId, currentKeys, physicalShardMap[destId], dataMoveId));
+							actors.push_back(unassignServerKeys(
+							    &(tr->getTransaction()), destId, currentKeys, physicalShardMap[destId], dataMoveId));
 						}
 					}
 
@@ -1815,10 +1815,10 @@ ACTOR static Future<Void> finishMoveShards(Database occ,
 					auto tssPair = tssMapping.find(storageServerInterfaces[s].id());
 
 					if (tssPair != tssMapping.end() && waitForTSSCounter > 0 &&
-							!tssToIgnore.count(tssPair->second.id())) {
+					    !tssToIgnore.count(tssPair->second.id())) {
 						tssReadyInterfs.push_back(tssPair->second);
 						tssReady.push_back(waitForShardReady(
-							tssPair->second, range, tr.getReadVersion().get(), GetShardStateRequest::READABLE));
+						    tssPair->second, range, tr.getReadVersion().get(), GetShardStateRequest::READABLE));
 					}
 				}
 
@@ -2634,7 +2634,7 @@ Future<Void> rawStartMovement(Database occ,
 		                       params.lock,
 		                       params.startMoveKeysParallelismLock,
 		                       params.relocationIntervalId,
-							   &tssMapping,
+		                       &tssMapping,
 		                       params.ddEnabledState,
 		                       params.cancelConflictingDataMoves);
 	}
