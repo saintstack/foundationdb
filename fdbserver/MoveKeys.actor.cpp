@@ -1301,8 +1301,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 			state KeyRange currentKeys = keys;
 			state bool complete = false;
 
-			// RYW to optimize re-reading the same key ranges. See readTSSMappingRYW
-			state Reference<ReadYourWritesTransaction> tr = makeReference<ReadYourWritesTransaction>(occ);
+			state Transaction tr(occ);
 
 			try {
 				// Keep track of old dests that may need to have ranges removed from serverKeys
@@ -1311,19 +1310,13 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 				// Keep track of shards for all src servers so that we can preserve their values in serverKeys
 				state std::unordered_map<UID, std::vector<Shard>> physicalShardMap;
 
-				tr->getTransaction().trState->taskID = TaskPriority::MoveKeys;
-				tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
-				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+				tr.trState->taskID = TaskPriority::MoveKeys;
+				tr.setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
+				tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 
-				wait(checkMoveKeysLock(&(tr->getTransaction()), lock, ddEnabledState));
+				wait(checkMoveKeysLock(&tr, lock, ddEnabledState));
 
-				if (!loadedTssMapping) {
-					// share transaction for loading tss mapping with the rest of start move keys
-					wait(readTSSMappingRYW(tr, tssMapping));
-					loadedTssMapping = true;
-				}
-
-				Optional<Value> val = wait(tr->get(dataMoveKeyFor(dataMoveId)));
+				Optional<Value> val = wait(tr.get(dataMoveKeyFor(dataMoveId)));
 				if (val.present()) {
 					DataMoveMetaData dmv = decodeDataMoveValue(val.get()); // dmv: Data move value.
 					dataMove = dmv;
@@ -1333,8 +1326,8 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					ASSERT(!dataMove.ranges.empty() && dataMove.ranges.front().begin == keys.begin);
 					if (cancelDataMove) {
 						dataMove.setPhase(DataMoveMetaData::Deleting);
-						tr->set(dataMoveKeyFor(dataMoveId), dataMoveValue(dataMove));
-						wait(tr->commit());
+						tr.set(dataMoveKeyFor(dataMoveId), dataMoveValue(dataMove));
+						wait(tr.commit());
 						throw movekeys_conflict();
 					}
 					if (dataMove.getPhase() == DataMoveMetaData::Deleting) {
@@ -1360,10 +1353,16 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					    .detail("DataMoveID", dataMoveId);
 				}
 
+				if (!loadedTssMapping) {
+					// share transaction for loading tss mapping with the rest of start move keys
+					wait(readTSSMapping(&tr, tssMapping));
+					loadedTssMapping = true;
+				}
+
 				std::vector<Future<Optional<Value>>> serverListEntries;
 				serverListEntries.reserve(servers.size());
 				for (int s = 0; s < servers.size(); s++) {
-					serverListEntries.push_back(tr->get(serverListKeyFor(servers[s])));
+					serverListEntries.push_back(tr.get(serverListKeyFor(servers[s])));
 				}
 				std::vector<Optional<Value>> serverListValues = wait(getAll(serverListEntries));
 
@@ -1383,13 +1382,13 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 				if (!currentKeys.empty()) {
 					const int rowLimit = SERVER_KNOBS->MOVE_SHARD_KRM_ROW_LIMIT;
 					const int byteLimit = SERVER_KNOBS->MOVE_SHARD_KRM_BYTE_LIMIT;
-					state RangeResult old = wait(krmGetRanges(tr, keyServersPrefix, currentKeys, rowLimit, byteLimit));
+					state RangeResult old = wait(krmGetRanges(&tr, keyServersPrefix, currentKeys, rowLimit, byteLimit));
 
 					state Key endKey = old.back().key;
 					currentKeys = KeyRangeRef(currentKeys.begin, endKey);
 
 					// Check that enough servers for each shard are in the correct state
-					state RangeResult UIDtoTagMap = wait(tr->getRange(serverTagKeys, CLIENT_KNOBS->TOO_MANY));
+					state RangeResult UIDtoTagMap = wait(tr.getRange(serverTagKeys, CLIENT_KNOBS->TOO_MANY));
 					ASSERT(!UIDtoTagMap.more && UIDtoTagMap.size() < CLIENT_KNOBS->TOO_MANY);
 
 					// For each intersecting range, update keyServers[range] dest to be servers and clear existing dest
@@ -1409,7 +1408,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 						    .detail("OldDest", describe(dest))
 						    .detail("SrcID", srcId)
 						    .detail("DestID", destId)
-						    .detail("ReadVersion", tr->getReadVersion().get());
+						    .detail("ReadVersion", tr.getReadVersion().get());
 
 						if (destId.isValid()) {
 							TraceEvent(SevWarn, "StartMoveShardsDestIDExist", relocationIntervalId)
@@ -1440,7 +1439,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 									wait(cleanUpDataMove(occ, destId, lock, startMoveKeysLock, keys, ddEnabledState));
 									throw retry();
 								} else {
-									Optional<Value> val = wait(tr->get(dataMoveKeyFor(destId)));
+									Optional<Value> val = wait(tr.get(dataMoveKeyFor(destId)));
 									ASSERT(val.present());
 									DataMoveMetaData dmv = decodeDataMoveValue(val.get());
 									TraceEvent(
@@ -1456,7 +1455,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 						}
 
 						// Update dest servers for this range to be equal to servers
-						krmSetPreviouslyEmptyRange(&(tr->getTransaction()),
+						krmSetPreviouslyEmptyRange(&(tr.getTransaction()),
 						                           keyServersPrefix,
 						                           rangeIntersectKeys,
 						                           keyServersValue(src, servers, srcId, dataMoveId),
@@ -1496,8 +1495,8 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					// Remove old dests from serverKeys.
 					for (const UID& destId : oldDests) {
 						if (std::find(servers.begin(), servers.end(), destId) == servers.end()) {
-							actors.push_back(unassignServerKeys(
-							    &(tr->getTransaction()), destId, currentKeys, physicalShardMap[destId], dataMoveId));
+							actors.push_back(
+							    unassignServerKeys(&tr, destId, currentKeys, physicalShardMap[destId], dataMoveId));
 						}
 					}
 
@@ -1508,7 +1507,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 						// to have the same shard boundaries If that invariant was important, we would have to move this
 						// inside the loop above and also set it for the src servers.
 						actors.push_back(krmSetRangeCoalescing(
-						    tr, serverKeysPrefixFor(servers[i]), currentKeys, allKeys, serverKeysValue(dataMoveId)));
+						    &tr, serverKeysPrefixFor(servers[i]), currentKeys, allKeys, serverKeysValue(dataMoveId)));
 					}
 
 					dataMove.ranges.clear();
@@ -1531,16 +1530,16 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					    .detail("NewDataMoveMetaData", dataMove.toString());
 				}
 
-				tr->set(dataMoveKeyFor(dataMoveId), dataMoveValue(dataMove));
+				tr.set(dataMoveKeyFor(dataMoveId), dataMoveValue(dataMove));
 
 				wait(waitForAll(actors));
 
-				wait(tr->commit());
+				wait(tr.commit());
 
 				TraceEvent(sevDm, "DataMoveMetaDataCommit", dataMove.id)
 				    .detail("DataMoveID", dataMoveId)
 				    .detail("DataMoveKey", dataMoveKeyFor(dataMoveId))
-				    .detail("CommitVersion", tr->getCommittedVersion())
+				    .detail("CommitVersion", tr.getCommittedVersion())
 				    .detail("DeltaRange", currentKeys.toString())
 				    .detail("Range", describe(dataMove.ranges))
 				    .detail("DataMove", dataMove.toString());
@@ -1558,7 +1557,7 @@ ACTOR static Future<Void> startMoveShards(Database occ,
 					    .detail("DataMoveID", dataMoveId)
 					    .detail("DataMoveRange", keys)
 					    .detail("CurrentDataMoveMetaData", dataMove.toString());
-					wait(tr->onError(e));
+					wait(tr.onError(e));
 				}
 			}
 		}
