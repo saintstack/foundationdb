@@ -29,7 +29,7 @@
 #include "fdbserver/workloads/MemoryKeyValueStore.h"
 
 // an enumeration of apis being tested
-enum TransactionType { NATIVE, READ_YOUR_WRITES, THREAD_SAFE, MULTI_VERSION };
+enum TransactionType { NATIVE, READ_YOUR_WRITES, THREAD_SAFE, MULTI_VERSION, GRPC };
 
 // A wrapper interface for dealing with different Transaction implementations
 struct TransactionWrapper : public ReferenceCounted<TransactionWrapper> {
