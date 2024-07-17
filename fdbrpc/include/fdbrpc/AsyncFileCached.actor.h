@@ -22,6 +22,7 @@
 
 // When actually compiled (NO_INTELLISENSE), include the generated version of this file.  In intellisense use the source
 // version.
+#include "flow/Trace.h"
 #if defined(NO_INTELLISENSE) && !defined(FLOW_ASYNCFILECACHED_ACTOR_G_H)
 #define FLOW_ASYNCFILECACHED_ACTOR_G_H
 #include "fdbrpc/AsyncFileCached.actor.g.h"
@@ -101,12 +102,20 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 	void try_evict() {
 		if (RANDOM == cacheEvictionType) {
 			if (pages.size() >= (uint64_t)maxPages && !pages.empty()) {
+				auto b = false;
 				for (int i = 0; i < FLOW_KNOBS->MAX_EVICT_ATTEMPTS;
 				     i++) { // If we don't manage to evict anything, just go ahead and exceed the cache limit
 					int toEvict = deterministicRandom()->randomInt(0, pages.size());
 					if (pages[toEvict]->evict()) {
+						b = true;
 						++cacheEvictions;
 						break;
+					}
+					if (!b) {
+						TraceEvent(SevWarn, "EvictablePageCacheTryEvictFailed")
+							.detail("CacheSize", pages.size())
+							.detail("MaxSize", maxPages)
+							.detail("MAX_EVICT_ATTEMPTS", FLOW_KNOBS->MAX_EVICT_ATTEMPTS);
 					}
 				}
 			}
