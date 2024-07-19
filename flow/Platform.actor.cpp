@@ -2114,22 +2114,25 @@ static void enableLargePages() {
 
 #ifndef _WIN32
 static void* mmapSafe(void* addr, size_t len, int prot, int flags, int fd, off_t offset) {
+	return malloc(len);
+	/*
 	void* result = mmap(addr, len, prot, flags, fd, offset);
 	if (result == MAP_FAILED) {
-		int err = errno;
-		fprintf(stderr,
-		        "Error calling mmap(%p, %zu, %d, %d, %d, %jd): %s\n",
-		        addr,
-		        len,
-		        prot,
-		        flags,
-		        fd,
-		        (intmax_t)offset,
-		        strerror(err));
-		fflush(stderr);
-		std::abort();
+	    int err = errno;
+	    fprintf(stderr,
+	            "Error calling mmap(%p, %zu, %d, %d, %d, %jd): %s\n",
+	            addr,
+	            len,
+	            prot,
+	            flags,
+	            fd,
+	            (intmax_t)offset,
+	            strerror(err));
+	    fflush(stderr);
+	    std::abort();
 	}
 	return result;
+	*/
 }
 
 static void mprotectSafe(void* p, size_t s, int prot) {

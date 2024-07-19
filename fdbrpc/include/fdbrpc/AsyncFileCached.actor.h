@@ -78,8 +78,9 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 	}
 
 	void allocate(EvictablePage* page) {
-		try_evict();
-		try_evict();
+		auto evicted1 = try_evict();
+		auto evicted2 = try_evict();
+
 
 		page->data = allocateFast4kAligned(pageSize);
 
@@ -89,6 +90,16 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 		} else {
 			lruPages.push_back(*page); // new page is considered the most recently used (placed at LRU tail)
 		}
+					if (!evicted1 && !evicted2) {
+						auto attempts = FLOW_KNOBS->MAX_EVICT_ATTEMPTS;
+						TraceEvent(SevWarn, "EvictablePageCacheTryEvictFailed")
+							.detail("CacheSize", pages.size())
+							.detail("MaxSize", maxPages)
+							.detail("Evicted1", evicted1)
+							.detail("Evicted2", evicted2)
+							.detail("MaxEvictAttempts", attempts);
+					}
+
 	}
 
 	void updateHit(EvictablePage* page) {
@@ -99,23 +110,17 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 		}
 	}
 
-	void try_evict() {
+	bool try_evict() {
+		auto success = false;
 		if (RANDOM == cacheEvictionType) {
 			if (pages.size() >= (uint64_t)maxPages && !pages.empty()) {
-				auto b = false;
 				for (int i = 0; i < FLOW_KNOBS->MAX_EVICT_ATTEMPTS;
 				     i++) { // If we don't manage to evict anything, just go ahead and exceed the cache limit
 					int toEvict = deterministicRandom()->randomInt(0, pages.size());
 					if (pages[toEvict]->evict()) {
-						b = true;
+						success = true;
 						++cacheEvictions;
 						break;
-					}
-					if (!b) {
-						TraceEvent(SevWarn, "EvictablePageCacheTryEvictFailed")
-							.detail("CacheSize", pages.size())
-							.detail("MaxSize", maxPages)
-							.detail("MAX_EVICT_ATTEMPTS", FLOW_KNOBS->MAX_EVICT_ATTEMPTS);
 					}
 				}
 			}
@@ -133,6 +138,7 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 				}
 			}
 		}
+		return success;
 	}
 
 	std::vector<EvictablePage*> pages;
