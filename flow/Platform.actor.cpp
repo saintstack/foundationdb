@@ -3212,6 +3212,18 @@ char *tostr(const size_t n, char *out)
 std::atomic<int> jemalloc_counter(0);
 void jemalloc() {
 #ifdef USE_JEMALLOC
+	// See https://github.com/jemalloc/jemalloc/wiki/Use-Case%3A-Heap-Profiling
+	auto count = jemalloc_counter.fetch_add(1);
+	if (count < 20) {
+	   return;
+	} else if (count == 20) {
+	   TraceEvent("InitJEMalloc").detail("COUNT", count);
+	   mallctl("prof.active", nullptr, nullptr, nullptr, 0);
+	   return;
+	}
+
+
+	// Every time through, put up vital stats.
 	// From https://github.com/jemalloc/jemalloc/issues/757
 	size_t sz, allocated, active, metadata, resident, mapped;
 	sz = sizeof(size_t);
@@ -3220,8 +3232,7 @@ void jemalloc() {
 	// Update the statistics cached by mallctl.
 	mallctl("thread.tcache.flush", NULL, NULL, NULL, 0);
 	mallctl("epoch", &epoch, &sz, &epoch, sz);
-	auto count = jemalloc_counter.fetch_add(1);
-	auto heapDump = count >= 20 && count % 2 == 0;
+
 
 	// Get basic allocation statistics.  Take care to check for
 	// errors, since --enable-stats must have been specified at
@@ -3238,10 +3249,10 @@ void jemalloc() {
 		    .detail("Metadata", tostr(metadata, smetadata))
 		    .detail("Resident", tostr(resident, sresident))
 		    .detail("Mapped", tostr(mapped, smapped))
-		    .detail("COUNT", count)
-		    .detail("HeapDump", heapDump);
+		    .detail("COUNT", count);
 	}
-	if (heapDump) {
+		// Heap dump every 2nd time through here.
+	if (count % 2 == 0) {
     	malloc_stats_print(nullptr, nullptr, nullptr);
 		mallctl("prof.dump", nullptr, nullptr, nullptr, 0);
 	}

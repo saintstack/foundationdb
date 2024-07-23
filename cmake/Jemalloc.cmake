@@ -6,6 +6,7 @@ endif()
 
 add_library(jemalloc::jemalloc STATIC IMPORTED)
 add_library(jemalloc_pic::jemalloc_pic STATIC IMPORTED)
+add_library(Libunwind::Libunwind STATIC IMPORTED)
 
 include(ExternalProject)
 set(JEMALLOC_DIR "${CMAKE_BINARY_DIR}/jemalloc")
@@ -15,7 +16,8 @@ ExternalProject_add(Jemalloc_project
   BUILD_BYPRODUCTS "${JEMALLOC_DIR}/include/jemalloc/jemalloc.h"
   "${JEMALLOC_DIR}/lib/libjemalloc.a"
   "${JEMALLOC_DIR}/lib/libjemalloc_pic.a"
-  CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=${JEMALLOC_DIR} --enable-static --disable-cxx --enable-prof --enable-stats --with-malloc-conf=prof:true,prof_prefix:/var/tmp/fdbserver
+  CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=${JEMALLOC_DIR} --enable-static --disable-cxx --enable-prof-libunwind --enable-prof --enable-stats --with-malloc-conf=prof:false,prof_leak:true,prof_final:true,prof_prefix:/var/tmp/fdbserver
+  #CONFIGURE_COMMAND CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --prefix=${JEMALLOC_DIR} --enable-static --disable-cxx --enable-prof --enable-stats --with-malloc-conf=prof:false,prof_leak:true,prof_final:true,prof_prefix:/var/tmp/fdbserver
   BUILD_IN_SOURCE ON
   BUILD_COMMAND make
   INSTALL_DIR "${JEMALLOC_DIR}"

@@ -463,7 +463,7 @@ Future<Void> heapDumper() {
 	auto jemalloc = [=]() {
 		platform::jemalloc();
 	};
-	return recurring(jemalloc, 1*60/*Seconds*/);
+	return recurring(jemalloc, 15*60/*Seconds*/);
 }
 
 Future<Void> startMemoryUsageMonitor(uint64_t memLimit) {
