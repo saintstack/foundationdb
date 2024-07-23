@@ -3221,7 +3221,7 @@ void jemalloc() {
 	mallctl("thread.tcache.flush", NULL, NULL, NULL, 0);
 	mallctl("epoch", &epoch, &sz, &epoch, sz);
 	auto count = jemalloc_counter.fetch_add(1);
-	auto heapDump = count > 20 && count % 2 == 0;
+	auto heapDump = count >= 20 && count % 2 == 0;
 
 	// Get basic allocation statistics.  Take care to check for
 	// errors, since --enable-stats must have been specified at
@@ -3238,6 +3238,7 @@ void jemalloc() {
 		    .detail("Metadata", tostr(metadata, smetadata))
 		    .detail("Resident", tostr(resident, sresident))
 		    .detail("Mapped", tostr(mapped, smapped))
+		    .detail("COUNT", count)
 		    .detail("HeapDump", heapDump);
 	}
 	if (heapDump) {
