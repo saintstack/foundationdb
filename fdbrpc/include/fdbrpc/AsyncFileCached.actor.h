@@ -22,7 +22,6 @@
 
 // When actually compiled (NO_INTELLISENSE), include the generated version of this file.  In intellisense use the source
 // version.
-#include "flow/Trace.h"
 #if defined(NO_INTELLISENSE) && !defined(FLOW_ASYNCFILECACHED_ACTOR_G_H)
 #define FLOW_ASYNCFILECACHED_ACTOR_G_H
 #include "fdbrpc/AsyncFileCached.actor.g.h"
@@ -78,9 +77,8 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 	}
 
 	void allocate(EvictablePage* page) {
-		auto evicted1 = try_evict();
-		auto evicted2 = try_evict();
-
+		try_evict();
+		try_evict();
 
 		page->data = allocateFast4kAligned(pageSize);
 
@@ -90,16 +88,6 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 		} else {
 			lruPages.push_back(*page); // new page is considered the most recently used (placed at LRU tail)
 		}
-					if (!evicted1 && !evicted2) {
-						auto attempts = FLOW_KNOBS->MAX_EVICT_ATTEMPTS;
-						TraceEvent(SevWarn, "EvictablePageCacheTryEvictFailed")
-							.detail("CacheSize", pages.size())
-							.detail("MaxSize", maxPages)
-							.detail("Evicted1", evicted1)
-							.detail("Evicted2", evicted2)
-							.detail("MaxEvictAttempts", attempts);
-					}
-
 	}
 
 	void updateHit(EvictablePage* page) {
@@ -110,15 +98,13 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 		}
 	}
 
-	bool try_evict() {
-		auto success = false;
+	void try_evict() {
 		if (RANDOM == cacheEvictionType) {
 			if (pages.size() >= (uint64_t)maxPages && !pages.empty()) {
 				for (int i = 0; i < FLOW_KNOBS->MAX_EVICT_ATTEMPTS;
 				     i++) { // If we don't manage to evict anything, just go ahead and exceed the cache limit
 					int toEvict = deterministicRandom()->randomInt(0, pages.size());
 					if (pages[toEvict]->evict()) {
-						success = true;
 						++cacheEvictions;
 						break;
 					}
@@ -138,7 +124,6 @@ struct EvictablePageCache : ReferenceCounted<EvictablePageCache> {
 				}
 			}
 		}
-		return success;
 	}
 
 	std::vector<EvictablePage*> pages;
