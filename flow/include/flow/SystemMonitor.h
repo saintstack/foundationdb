@@ -155,5 +155,6 @@ SystemStatistics customSystemMonitor(std::string const& eventName,
 SystemStatistics getSystemStatistics();
 
 Future<Void> startMemoryUsageMonitor(uint64_t memLimit);
+Future<Void> heapDumper();
 
 #endif /* FLOW_SYSTEM_MONITOR_H */

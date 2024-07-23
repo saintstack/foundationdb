@@ -2151,6 +2151,7 @@ int main(int argc, char* argv[]) {
 		Error::init();
 		std::set_new_handler(&platform::outOfMemory);
 		Future<Void> memoryUsageMonitor = startMemoryUsageMonitor(opts.memLimit);
+		Future<Void> heapDump = heapDumper();
 		setMemoryQuota(opts.virtualMemLimit);
 
 		Future<Optional<Void>> f;

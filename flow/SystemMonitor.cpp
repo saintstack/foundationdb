@@ -459,6 +459,13 @@ SystemStatistics customSystemMonitor(std::string const& eventName, StatisticsSta
 	return currentStats;
 }
 
+Future<Void> heapDumper() {
+	auto jemalloc = [=]() {
+		platform::jemalloc();
+	};
+	return recurring(jemalloc, 1*60/*Seconds*/);
+}
+
 Future<Void> startMemoryUsageMonitor(uint64_t memLimit) {
 	if (memLimit == 0) {
 		return Void();

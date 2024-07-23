@@ -409,6 +409,7 @@ void setCloseOnExec(int fd);
 
 // Logs an out of memory error and exits the program
 void outOfMemory();
+void jemalloc();
 
 int getRandomSeed();
 

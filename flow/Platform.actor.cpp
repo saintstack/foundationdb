@@ -3195,6 +3195,58 @@ uint8_t* g_extra_memory;
 
 namespace platform {
 
+char *tostr(const size_t n, char *out)
+{
+    char *save = out;
+    char buf[100];
+    char *p; 
+
+    sprintf(buf, "%zu", n); 
+    for (p = buf; *p != 0; p++) {
+       *out++ = *p;
+    }   
+    *--out = 0;
+    return save;
+}
+
+std::atomic<int> jemalloc_counter(0);
+void jemalloc() {
+#ifdef USE_JEMALLOC
+	// From https://github.com/jemalloc/jemalloc/issues/757
+	size_t sz, allocated, active, metadata, resident, mapped;
+	sz = sizeof(size_t);
+	uint64_t epoch = 1;
+
+	// Update the statistics cached by mallctl.
+	mallctl("thread.tcache.flush", NULL, NULL, NULL, 0);
+	mallctl("epoch", &epoch, &sz, &epoch, sz);
+	auto count = jemalloc_counter.fetch_add(1);
+	auto heapDump = count > 20 && count % 2 == 0;
+
+	// Get basic allocation statistics.  Take care to check for
+	// errors, since --enable-stats must have been specified at
+	// build time for these statistics to be available.
+	if (mallctl("stats.allocated", &allocated, &sz, NULL, 0) == 0 &&
+	    mallctl("stats.active", &active, &sz, NULL, 0) == 0 &&
+	    mallctl("stats.metadata", &metadata, &sz, NULL, 0) == 0 &&
+	    mallctl("stats.resident", &resident, &sz, NULL, 0) == 0 &&
+	    mallctl("stats.mapped", &mapped, &sz, NULL, 0) == 0) {
+		char sallocated[100], sactive[100], smetadata[100], sresident[100], smapped[100];
+		TraceEvent("JEMalloc")
+		    .detail("Allocated", tostr(allocated, sallocated))
+		    .detail("Active", tostr(active, sactive))
+		    .detail("Metadata", tostr(metadata, smetadata))
+		    .detail("Resident", tostr(resident, sresident))
+		    .detail("Mapped", tostr(mapped, smapped))
+		    .detail("HeapDump", heapDump);
+	}
+	if (heapDump) {
+    	malloc_stats_print(nullptr, nullptr, nullptr);
+		mallctl("prof.dump", nullptr, nullptr, nullptr, 0);
+	}
+#endif
+}
+
 void outOfMemory() {
 #ifdef ALLOC_INSTRUMENTATION
 	delete[] g_extra_memory;
@@ -3423,7 +3475,7 @@ extern "C" void flushAndExit(int exitCode) {
 	TerminateProcess(GetCurrentProcess(), exitCode);
 #else
 	#ifdef USE_JEMALLOC
-       // malloc_stats_print(nullptr, nullptr, nullptr);
+       malloc_stats_print(nullptr, nullptr, nullptr);
        if (exitCode != FDB_EXIT_SUCCESS) {
                mallctl("prof.dump", nullptr, nullptr, nullptr, 0);
        }
