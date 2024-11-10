@@ -9,7 +9,8 @@ endif()
 include(ExternalProject)
 ExternalProject_Add(awssdk_project
   GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
-  GIT_TAG e4b4b310d8631bc7e9a797b6ac03a73c6f210bf6 # v1.9.331
+  #GIT_TAG e4b4b310d8631bc7e9a797b6ac03a73c6f210bf6 # v1.9.331
+  GIT_TAG e45f7f5 # v1.11.444
   SOURCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/awssdk-src"
   BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/awssdk-build"
   GIT_CONFIG advice.detachedHead=false
@@ -18,10 +19,11 @@ ExternalProject_Add(awssdk_project
   UPDATE_DISCONNECTED ON
   CMAKE_ARGS -DBUILD_SHARED_LIBS=OFF        # SDK builds shared libs by default, we want static libs
   -DENABLE_TESTING=OFF
-  -DBUILD_ONLY=core              # git repo contains SDK for every AWS product, we only want the core auth libraries
+  #  -DBUILD_ONLY=core              # git repo contains SDK for every AWS product, we only want the core auth libraries
+  -DBUILD_ONLY=transfer
   -DSIMPLE_INSTALL=ON
   -DCMAKE_INSTALL_PREFIX=install # need to specify an install prefix so it doesn't install in /usr/lib - FIXME: use absolute path
-  -DBYO_CRYPTO=ON                # we have our own crypto libraries that conflict if we let aws sdk build and link its own
+  -DBYO_CRYPTO=OFF                # we have our own crypto libraries that conflict if we let aws sdk build and link its own
   -DBUILD_CURL=ON
   -DBUILD_ZLIB=ON
 

@@ -28,6 +28,14 @@ if(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
   set(IS_ARM_MAC YES)
 endif()
 
+if(WITH_AWS_BACKUP)
+  # TODO: We are dependent on build over in fdbclient. Should make it explicit.
+  # There is probably a better way to do this in cmake. On other hand this is
+  # just demo code and this addition belongs in core, not out here in bindings test.
+  include_directories(${CMAKE_BINARY_DIR}/fdbclient/awssdk-build/install/include)
+  link_directories(${CMAKE_BINARY_DIR}/fdbclient/awssdk-build/install/lib64)
+endif()
+
 add_custom_command(OUTPUT ${asm_file} ${CMAKE_CURRENT_BINARY_DIR}/fdb_c_function_pointers.g.h
   COMMAND $<TARGET_FILE:Python3::Interpreter> ${CMAKE_CURRENT_SOURCE_DIR}/generate_asm.py ${os} ${cpu}
   ${CMAKE_CURRENT_SOURCE_DIR}/fdb_c.cpp
@@ -184,6 +192,9 @@ if(NOT WIN32)
     add_library(trace_partial_file_suffix_test OBJECT ${TRACE_PARTIAL_FILE_SUFFIX_TEST_SRCS})
     add_library(disconnected_timeout_unit_tests OBJECT ${DISCONNECTED_TIMEOUT_UNIT_TEST_SRCS})
     add_library(fdb_c_client_config_tester OBJECT test/client_config_tester.cpp)
+    if(WITH_AWS_BACKUP)
+      add_library(s3transfer OBJECT test/s3transfer.cpp)
+    endif()
   else()
     add_executable(fdb_c_performance_test test/performance_test.c test/test.h)
     add_executable(fdb_c_ryw_benchmark test/ryw_benchmark.c test/test.h)
@@ -203,6 +214,41 @@ if(NOT WIN32)
     strip_debug_symbols(fdb_c_txn_size_test)
     strip_debug_symbols(fdb_c_client_memory_test)
     add_executable(fdb_c_client_config_tester test/client_config_tester.cpp)
+    if(WITH_AWS_BACKUP)
+      add_executable(s3transfer test/s3transfer.cpp)
+      # Lib listing order and repetition inspired by https://github.com/aws/aws-sdk-cpp/discussions/2184
+      target_link_libraries(s3transfer PRIVATE
+        aws-crt-cpp   # needs to come first for initializing g_allocator before use (ACINF-3981).
+        aws-cpp-sdk-s3
+        aws-cpp-sdk-core
+        aws-c-event-stream
+        aws-checksums
+        aws-crt-cpp  # needs to be also listed here to satisfy additional dependencies
+        aws-c-mqtt
+        aws-c-http
+        aws-c-compression
+        aws-c-s3
+        aws-c-auth
+        aws-c-cal
+        aws-c-io
+        aws-c-common
+        aws-c-http
+        aws-c-sdkutils
+        aws-cpp-sdk-transfer
+        Threads::Threads
+        curl
+        z
+        #ssl
+        crypto
+        #gcc_s # Needed for missing linker symbol __cpu_model, apparently
+        #gcc	  # Needed for missing linker symbol __cpu_model, apparently
+        #ldap_r   # needed for newer libcurl? Note: ldap_r is thread-safe variant of ldap, newer distros only have ldap_r
+        #lber   #needed for newer libldap ?
+        dl #needed in the end as well, in addition to general -ldl in Common.cmake
+        #ssl
+        )
+      target_include_directories(s3transfer PUBLIC ${CMAKE_BINARY_DIR}/fdbclient/awssdk-build/install/include)
+    endif()
   endif()
 
   target_link_libraries(fdb_c_performance_test PRIVATE fdb_c Threads::Threads)
