@@ -31,7 +31,31 @@ TestHarness2 uses directories typically created by the calling script, [`correct
         *   Raw FoundationDB trace event logs (`trace.*.json` or `trace.*.xml`).
         *   `simfdb/`: Simulation database files (if running simulation tests).
         *   `valgrind-<seed>.xml`: Valgrind output files (if running with valgrind).
+        *   `trace_backup_<seed>/`: Backup directory containing trace files from the initial run when determinism checks occur (preserves logs that would otherwise be overwritten).
         *   Other test artifacts generated during execution.
+
+### Determinism Check Log Preservation
+
+TestHarness2 automatically preserves trace logs from both the initial run and determinism check when determinism verification occurs (approximately 5% of simulation tests). This feature prevents the loss of valuable debugging information that would otherwise be overwritten.
+
+**How it works:**
+1. **Initial run** completes and produces trace files
+2. **Files moved** to `trace_initial_run/` directory before determinism check
+3. **Determinism check** runs and creates new trace files in main directory
+4. **Determinism check files moved** to `trace_determinism_check/` directory after completion
+
+**Result:** Both sets of logs are clearly separated for easy analysis.
+
+**Example directory structure after determinism check:**
+```
+<test_uid>/
+├── trace_initial_run/
+│   └── trace.0.0.0.0.267.1752628294.yb4TCb.0.1.json    # Initial run
+├── trace_determinism_check/
+│   └── trace.0.0.0.0.505.1752628352.yb4TCb.0.1.json    # Determinism check run
+├── simfdb/
+└── valgrind-3866502111.xml
+```
 
 ### Cleanup Behavior
 
