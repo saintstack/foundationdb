@@ -109,6 +109,7 @@ S3BlobStoreEndpoint::BlobKnobs::BlobKnobs() {
 	sdk_auth = false;
 	enable_object_integrity_check = CLIENT_KNOBS->BLOBSTORE_ENABLE_OBJECT_INTEGRITY_CHECK;
 	global_connection_pool = CLIENT_KNOBS->BLOBSTORE_GLOBAL_CONNECTION_POOL;
+	bypass_simulation = 0;
 }
 
 bool S3BlobStoreEndpoint::BlobKnobs::set(StringRef name, int value) {
@@ -152,6 +153,7 @@ bool S3BlobStoreEndpoint::BlobKnobs::set(StringRef name, int value) {
 	TRY_PARAM(sdk_auth, sa);
 	TRY_PARAM(enable_object_integrity_check, eoic);
 	TRY_PARAM(global_connection_pool, gcp);
+	TRY_PARAM(bypass_simulation, bs);
 #undef TRY_PARAM
 	return false;
 }
@@ -194,6 +196,7 @@ std::string S3BlobStoreEndpoint::BlobKnobs::getURLParameters() const {
 	_CHECK_PARAM(global_connection_pool, gcp);
 	_CHECK_PARAM(max_delay_retryable_error, dre);
 	_CHECK_PARAM(max_delay_connection_failed, dcf);
+	_CHECK_PARAM(bypass_simulation, bs);
 #undef _CHECK_PARAM
 	return r;
 }
@@ -1022,6 +1025,7 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 	state UnsentPacketQueue dryrunContentCopy; // NonCopyable state var so must be declared at top of actor
 	state Reference<HTTP::OutgoingRequest> req = makeReference<HTTP::OutgoingRequest>();
 	state Reference<HTTP::OutgoingRequest> dryrunRequest = makeReference<HTTP::OutgoingRequest>();
+	state UID simLogID = UID();
 	req->verb = verb;
 	req->data.content = &contentCopy;
 	req->data.contentLen = contentLen;
@@ -1068,6 +1072,16 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 		state std::string canonicalURI = resource;
 		// Set the resource on each loop so we don't double-encode when we set it to `getCanonicalURI` below.
 		req->resource = resource;
+
+		if (CLIENT_KNOBS->SIM_LOG_S3_DETAILS) {
+			simLogID = deterministicRandom()->randomUniqueID();
+			TraceEvent("SimS3Request", simLogID)
+			    .detail("Verb", verb)
+			    .detail("Resource", resource)
+			    .detail("ContentLength", contentLen)
+			    .detail("Host", bstore->host);
+		}
+
 		state UID connID = UID();
 		state double reqStartTimer;
 		state double connectStartTimer = g_network->timer();
