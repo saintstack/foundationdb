@@ -1025,7 +1025,6 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 	state UnsentPacketQueue dryrunContentCopy; // NonCopyable state var so must be declared at top of actor
 	state Reference<HTTP::OutgoingRequest> req = makeReference<HTTP::OutgoingRequest>();
 	state Reference<HTTP::OutgoingRequest> dryrunRequest = makeReference<HTTP::OutgoingRequest>();
-	state UID simLogID = UID();
 	req->verb = verb;
 	req->data.content = &contentCopy;
 	req->data.contentLen = contentLen;
@@ -1072,15 +1071,6 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 		state std::string canonicalURI = resource;
 		// Set the resource on each loop so we don't double-encode when we set it to `getCanonicalURI` below.
 		req->resource = resource;
-
-		if (CLIENT_KNOBS->SIM_LOG_S3_DETAILS) {
-			simLogID = deterministicRandom()->randomUniqueID();
-			TraceEvent("SimS3Request", simLogID)
-			    .detail("Verb", verb)
-			    .detail("Resource", resource)
-			    .detail("ContentLength", contentLen)
-			    .detail("Host", bstore->host);
-		}
 
 		state UID connID = UID();
 		state double reqStartTimer;

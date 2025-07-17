@@ -254,7 +254,6 @@ void ClientKnobs::initialize(Randomize randomize) {
 	init( BLOBSTORE_MAX_DELAY_RETRYABLE_ERROR,      60  );
 	init( BLOBSTORE_MAX_DELAY_CONNECTION_FAILED,    10  );
 	init( BLOBSTORE_ENABLE_OBJECT_INTEGRITY_CHECK, true);
-	init( SIM_LOG_S3_DETAILS, true);
 
 	init( BLOBSTORE_LIST_REQUESTS_PER_SECOND,       200 );
 	init( BLOBSTORE_WRITE_REQUESTS_PER_SECOND,       50 );
