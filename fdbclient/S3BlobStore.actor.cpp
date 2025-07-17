@@ -912,31 +912,95 @@ std::string awsCanonicalURI(const std::string& resource, std::vector<std::string
 
 // ref: https://docs.aws.amazon.com/AmazonS3/latest/API/ErrorResponses.html
 std::string parseErrorCodeFromS3(std::string xmlResponse) {
+	// Handle empty or non-XML responses gracefully
+	if (xmlResponse.empty()) {
+		TraceEvent(SevWarn, "ParseS3XMLResponseEmpty").log();
+		return "";
+	}
+
+	// Log the response for debugging SeaweedFS compatibility issues
+	TraceEvent(SevWarn, "ParseS3XMLResponseAttempt")
+	    .detail("ResponseLength", xmlResponse.length())
+	    .detail("ResponsePreview", xmlResponse.substr(0, std::min(200, (int)xmlResponse.length())))
+	    .log();
+
 	// Copy XML string to a modifiable buffer
 	try {
 		std::vector<char> xmlBuffer(xmlResponse.begin(), xmlResponse.end());
 		xmlBuffer.push_back('\0'); // Ensure null-terminated string
+
 		// Parse the XML
 		xml_document<> doc;
 		doc.parse<0>(&xmlBuffer[0]);
-		// Find the root node
+
+		// Find the root node - try "Error" first, then any root node
 		xml_node<>* root = doc.first_node("Error");
 		if (!root) {
-			TraceEvent(SevWarn, "ParseS3XMLResponseNoError").detail("Response", xmlResponse).log();
-			return "";
+			// Some S3-compatible servers might use different root elements
+			root = doc.first_node();
+			if (!root) {
+				TraceEvent(SevWarn, "ParseS3XMLResponseNoRoot").detail("Response", xmlResponse).log();
+				return "";
+			}
+			// If it's not an "Error" node, check if it contains error information
+			if (strcmp(root->name(), "Error") != 0) {
+				TraceEvent(SevWarn, "ParseS3XMLResponseNonErrorRoot")
+				    .detail("RootName", root->name())
+				    .detail("Response", xmlResponse)
+				    .log();
+				return "";
+			}
 		}
+
 		// Find the <Code> node
 		xml_node<>* codeNode = root->first_node("Code");
 		if (!codeNode) {
 			TraceEvent(SevWarn, "ParseS3XMLResponseNoErrorCode").detail("Response", xmlResponse).log();
+
+			// List all child nodes for debugging SeaweedFS format
+			for (xml_node<>* child = root->first_node(); child; child = child->next_sibling()) {
+				TraceEvent(SevWarn, "ParseS3XMLResponseChildNode")
+				    .detail("NodeName", child->name())
+				    .detail("NodeValue", child->value() ? child->value() : "")
+				    .log();
+			}
 			return "";
 		}
-		return std::string(codeNode->value());
+
+		// Ensure the code node has a value
+		const char* codeValue = codeNode->value();
+		if (!codeValue) {
+			TraceEvent(SevWarn, "ParseS3XMLResponseEmptyErrorCode").detail("Response", xmlResponse).log();
+			return "";
+		}
+
+		std::string errorCode = std::string(codeValue);
+		TraceEvent(SevWarn, "ParseS3XMLResponseSuccess").detail("ErrorCode", errorCode).log();
+
+		return errorCode;
+	} catch (rapidxml::parse_error& e) {
+		// Handle XML parsing errors specifically for better debugging
+		TraceEvent(SevWarn, "ParseS3XMLResponseParseError")
+		    .detail("Response", xmlResponse)
+		    .detail("ParseError", e.what())
+		    .detail("Where", e.where<char>() ? std::string(e.where<char>(), 50) : "unknown")
+		    .log();
+		return "";
 	} catch (Error e) {
-		TraceEvent("BackupParseS3ErrorCodeFailure").errorUnsuppressed(e);
-		throw backup_parse_s3_response_failure();
+		// Don't throw - just log and return empty string to allow processing to continue
+		TraceEvent(SevInfo, "BackupParseS3ErrorCodeFailure").errorUnsuppressed(e).detail("Response", xmlResponse).log();
+		return "";
+	} catch (std::exception& e) {
+		// Handle standard C++ exceptions
+		TraceEvent(SevInfo, "ParseS3XMLResponseStdError")
+		    .detail("Response", xmlResponse)
+		    .detail("StdError", e.what())
+		    .log();
+		return "";
 	} catch (...) {
-		throw backup_parse_s3_response_failure();
+		// Don't throw - just log and return empty string to allow processing to continue
+		TraceEvent(SevInfo, "BackupParseS3ErrorCodeUnknownFailure").detail("Response", xmlResponse).log();
+		return "";
 	}
 }
 
