@@ -609,6 +609,8 @@ class TestRunner:
         self.binary_chooser = OldBinaries()
         self.test_picker = TestPicker(self.test_path, self.binary_chooser.binaries)
 
+
+
     def backup_sim_dir(self, seed: int):
         temp_dir = config.run_temp_dir / str(self.uid)
         src_dir = temp_dir / "simfdb"
@@ -625,54 +627,75 @@ class TestRunner:
         shutil.rmtree(dest_dir)
         shutil.move(src_dir, dest_dir)
 
+
     def backup_trace_files(self, seed: int):
-        """Move trace files from initial run to dedicated directory before determinism check
-
-        This preserves the original trace files from the initial test run
-        before the determinism check run creates new trace files.
-        Both sets of logs will be available for analysis after the test completes.
-        """
+        """Backup trace files before determinism check to preserve initial run traces."""
         temp_dir = config.run_temp_dir / str(self.uid)
-        initial_run_dir = temp_dir / "trace_initial_run"
-        initial_run_dir.mkdir(exist_ok=True)
-
-        # Find all trace files in the temp directory and move them
-        trace_pattern = re.compile(r"trace\..*\.(xml|json)")
-        moved_files = []
-        for file in temp_dir.iterdir():
-            if file.is_file() and trace_pattern.match(file.name):
-                shutil.move(file, initial_run_dir / file.name)
-                moved_files.append(file.name)
-
-        # Log the move operation for debugging
-        if moved_files:
-            print(f"DEBUG: Moved {len(moved_files)} trace files to {initial_run_dir}", file=sys.stderr)
-            for filename in moved_files:
-                print(f"DEBUG:   - {filename}", file=sys.stderr)
-        else:
-            print(f"DEBUG: No trace files found to move in {temp_dir}", file=sys.stderr)
+        trace_files = list(temp_dir.glob("trace.*.json"))
+        
+        if not trace_files:
+            return
+            
+        # Create backup directory for initial run traces
+        backup_dir = temp_dir / f"trace_backup_{seed}"
+        backup_dir.mkdir(exist_ok=True)
+        
+        # Copy (don't move) trace files to backup
+        for trace_file in trace_files:
+            shutil.copy2(trace_file, backup_dir / trace_file.name)
+            
+        print(f"Backed up {len(trace_files)} trace files to {backup_dir}", file=sys.stderr)
 
     def restore_trace_files(self, seed: int):
-        """Move determinism check trace files to dedicated directory"""
+        """Restore trace files after determinism check for analysis."""
         temp_dir = config.run_temp_dir / str(self.uid)
-        determinism_check_dir = temp_dir / "trace_determinism_check"
+        backup_dir = temp_dir / f"trace_backup_{seed}"
+        
+        if not backup_dir.exists():
+            return
+            
+        # Create analysis directory structure
+        analysis_dir = temp_dir / f"determinism_analysis_{self.uid}"
+        analysis_dir.mkdir(exist_ok=True)
+        
+        initial_run_dir = analysis_dir / "initial_run"
+        determinism_check_dir = analysis_dir / "determinism_check"
+        
+        initial_run_dir.mkdir(exist_ok=True)
         determinism_check_dir.mkdir(exist_ok=True)
-
-        # Find all trace files in the temp directory and move them to determinism check dir
-        trace_pattern = re.compile(r"trace\..*\.(xml|json)")
-        moved_files = []
-        for file in temp_dir.iterdir():
-            if file.is_file() and trace_pattern.match(file.name):
-                shutil.move(file, determinism_check_dir / file.name)
-                moved_files.append(file.name)
-
-                        # Log the move operation for debugging
-        if moved_files:
-            print(f"DEBUG: Moved {len(moved_files)} determinism check trace files to {determinism_check_dir}", file=sys.stderr)
-            for filename in moved_files:
-                print(f"DEBUG:   - {filename}", file=sys.stderr)
-        else:
-            print(f"DEBUG: No determinism check trace files found to move in {temp_dir}", file=sys.stderr)
+        
+        # Get initial trace names before moving them
+        initial_trace_names = {f.name for f in backup_dir.glob("trace.*.json")}
+        
+        # Move backed up traces to initial_run directory
+        for trace_file in backup_dir.glob("trace.*.json"):
+            shutil.move(trace_file, initial_run_dir / trace_file.name)
+        
+        # Move ONLY the determinism check traces (exclude duplicates of initial run)
+        current_traces = list(temp_dir.glob("trace.*.json"))
+        
+        for trace_file in current_traces:
+            # Only copy traces that are NOT duplicates of the initial run
+            if trace_file.name not in initial_trace_names:
+                shutil.move(trace_file, determinism_check_dir / trace_file.name)
+        
+        # Clean up backup directory
+        shutil.rmtree(backup_dir)
+        
+        # Create analysis instructions
+        readme_file = analysis_dir / "README.txt"
+        with open(readme_file, 'w') as f:
+            f.write(f"DETERMINISM CHECK FAILED - Analysis Files\n")
+            f.write(f"==========================================\n\n")
+            f.write(f"Test UID: {self.uid}\n")
+            f.write(f"Seed: {seed}\n\n")
+            f.write(f"Directory Structure:\n")
+            f.write(f"- initial_run/: Trace files from the first run\n")
+            f.write(f"- determinism_check/: Trace files from the determinism check (second run only)\n\n")
+            f.write(f"To analyze the determinism failure:\n")
+            f.write(f"python3 contrib/TestHarness2/analyze_determinism_failure.py {initial_run_dir} {determinism_check_dir}\n\n")
+        
+        print(f"Determinism check failed. Analysis files created in {analysis_dir}", file=sys.stderr)
 
     def run_tests(
         self, test_files: List[Path], seed: int, test_picker: TestPicker
@@ -720,10 +743,9 @@ class TestRunner:
                 and run.summary.unseed is not None
                 and run.summary.unseed >= 0
             ):
-                # Backup trace files from initial run before determinism check
-                print(f"DEBUG: Starting determinism check for seed {seed + count}, unseed={run.summary.unseed}", file=sys.stderr)
+                # Backup trace files before determinism check
                 self.backup_trace_files(seed + count)
-
+                
                 run2 = TestRun(
                     binary,
                     file.absolute(),
@@ -742,9 +764,9 @@ class TestRunner:
                 run2.summary.out.dump(sys.stdout)
                 result = result and run2.success
 
-                # Restore trace files from initial run after determinism check
-                print(f"DEBUG: Determinism check completed, restoring trace files for seed {seed + count}", file=sys.stderr)
-                self.restore_trace_files(seed + count)
+                # Organize trace files for analysis if determinism check failed
+                if not result:
+                    self.restore_trace_files(seed + count)
 
                 if not result:
                     return False

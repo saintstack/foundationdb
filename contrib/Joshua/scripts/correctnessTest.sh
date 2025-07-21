@@ -145,14 +145,14 @@ PYTHON_EXIT_CODE=$?
 echo "TestHarness2 execution finished. Exit code: ${PYTHON_EXIT_CODE}" >&2
 
 # Note: stdout is already output via tee, no need to cat the file
-
-# Check if test actually failed
+    
+    # Check if test actually failed
 if [ -f "${PYTHON_APP_STDOUT_FILE}" ] && grep -q 'Ok="0"' "${PYTHON_APP_STDOUT_FILE}"; then
-    echo "Test result: FAILED" >&2
-    TEST_FAILED=true
-else
-    echo "Test result: PASSED" >&2
-    TEST_FAILED=false
+        echo "Test result: FAILED" >&2
+        TEST_FAILED=true
+    else
+        echo "Test result: PASSED" >&2
+        TEST_FAILED=false
 fi
 
 # Exit with appropriate code
