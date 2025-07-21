@@ -73,6 +73,8 @@ std::pair<BulkLoadFileSet, BulkLoadFileSet> getLocalRemoteFileSetSetting(Version
                                                                          const std::string& rootLocal,
                                                                          const std::string& rootRemote) {
 	// Generate file names based on data version
+	// NOTE: For determinism, we still use dumpVersion for file naming as it's part of the manifest metadata
+	// The version represents the actual data version being dumped, not just a filename component
 	const std::string manifestFileName = generateBulkDumpManifestFileName(dumpVersion);
 	const std::string dataFileName = generateBulkDumpDataFileName(dumpVersion);
 	const std::string byteSampleFileName = generateBulkDumpByteSampleFileName(dumpVersion);

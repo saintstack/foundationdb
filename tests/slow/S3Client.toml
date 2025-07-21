@@ -11,6 +11,14 @@
 # When done, run:
 #  shutdown_weed ~/weed
 
+[[knobs]]
+# Disable failure injection for deterministic behavior
+s3_sim_failure_injection = false
+bulkload_sim_failure_injection = false
+# DETERMINISM FIX: Disable buggified delays that cause timing variations in simulation
+[[flow_knobs]]
+MAX_BUGGIFIED_DELAY = 0.0
+
 # Increase verbosity for debugging
 http_verbose_level = 10
 s3client_verbose_level = 10

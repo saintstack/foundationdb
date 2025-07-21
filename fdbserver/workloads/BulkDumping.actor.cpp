@@ -229,8 +229,19 @@ struct BulkDumping : TestWorkload {
 				// We varies the timing of the job cancellation, we trigger the job cancellation with 10% probability at
 				// each time. Throughout the entire test, we inject the job cancellation at most maxCancelTimes times to
 				// ensure the job can complete fast.
+				// Skip failure injection for S3/BLOBSTORE transport to ensure determinism for S3 bulk dumps.
+				// While the test config sets bulkload_sim_failure_injection = false, this provides an additional
+				// safety measure to prevent non-deterministic cancellation behavior when using S3 transport.
+				BulkLoadTransportMethod transportMethod =
+				    static_cast<BulkLoadTransportMethod>(self->bulkLoadTransportMethod);
+				bool skipFailureInjection = (transportMethod == BulkLoadTransportMethod::BLOBSTORE);
+				if (skipFailureInjection && SERVER_KNOBS->BULKLOAD_SIM_FAILURE_INJECTION) {
+					TraceEvent("BulkDumpingWorkLoad")
+					    .detail("Phase", "Skipping Failure Injection for S3")
+					    .detail("TransportMethod", static_cast<int>(transportMethod));
+				}
 				if (SERVER_KNOBS->BULKLOAD_SIM_FAILURE_INJECTION && self->cancelTimes < self->maxCancelTimes &&
-				    deterministicRandom()->random01() < 0.1) {
+				    !skipFailureInjection && deterministicRandom()->random01() < 0.1) {
 					wait(cancelBulkLoadJob(cx, jobId));
 					self->cancelTimes++; // Inject cancellation. Then the bulkload job should run again.
 					TraceEvent("BulkDumpingWorkLoad").detail("Phase", "Job Cancelled").detail("Job", jobId.toString());

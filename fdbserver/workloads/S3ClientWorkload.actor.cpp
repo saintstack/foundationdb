@@ -152,7 +152,9 @@ private:
 
 		// --- BEGIN PER-RUN ISOLATION & CLEANUP ---
 		// Create a unique directory for this workload instance
-		state std::string uniqueRunDir = "s3_workload_run_" + deterministicRandom()->randomUniqueID().toString();
+		// Use deterministic directory name instead of random UID to ensure deterministic behavior
+		state std::string uniqueRunDir =
+		    format("s3_workload_run_%08x_%08x", self->clientId, deterministicRandom()->randomInt(0, 1000000));
 		try {
 			platform::createDirectory(uniqueRunDir);
 			TraceEvent(SevDebug, "S3ClientWorkloadCreatedRunDir").detail("Dir", uniqueRunDir);
@@ -171,7 +173,10 @@ private:
 
 		// Create a unique object key for S3 (using only the base filename)
 		std::string baseFilename = ::basename(self->credentials); // Gets filename from the *new* path
-		std::string uniqueObjectKey = baseFilename + "_" + deterministicRandom()->randomUniqueID().toString();
+		// Use deterministic ID based on client ID and test context instead of random UID
+		// This ensures identical behavior across determinism check runs
+		std::string deterministicId = format("%08x_%08x", self->clientId, deterministicRandom()->randomInt(0, 1000000));
+		std::string uniqueObjectKey = baseFilename + "_" + deterministicId;
 		state std::string file_url = self->addFileToUrl(uniqueObjectKey, self->s3Url);
 		state bool uploaded = false; // Track if upload started/succeeded
 		state Optional<Error> errorToThrow; // State variable to hold error

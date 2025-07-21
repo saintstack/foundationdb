@@ -37,7 +37,9 @@ DeterministicRandom::DeterministicRandom(uint32_t seed, bool useRandLog)
 
 double DeterministicRandom::random01() {
 	double d = gen64() / double(uint64_t(-1));
-	if (randLog && useRandLog)
+	// Sample 1 in 10000 RNG calls to reduce log volume for determinism analysis
+	static thread_local int sampleCounter = 0;
+	if (randLog && useRandLog && (++sampleCounter % 10000) == 0)
 		fprintf(randLog, "R01  %f\n", d);
 	return d;
 }
@@ -57,7 +59,9 @@ int DeterministicRandom::randomInt(int min, int maxPlusOne) {
 		i = -static_cast<int>(-static_cast<unsigned int>(min + 1) - v) - 1;
 	else
 		i = v + min;
-	if (randLog && useRandLog)
+	// Sample 1 in 10000 RNG calls to reduce log volume for determinism analysis
+	static thread_local int sampleCounter = 0;
+	if (randLog && useRandLog && (++sampleCounter % 10000) == 0)
 		fprintf(randLog, "Rint %d\n", i);
 	return i;
 }
@@ -103,6 +107,7 @@ UID DeterministicRandom::randomUniqueID() {
 	uint64_t x, y;
 	x = gen64();
 	y = gen64();
+	// Always log randomUniqueID calls for determinism analysis (they're critical)
 	if (randLog && useRandLog)
 		fmt::print(randLog, "Ruid {0} {1}\n", x, y);
 	return UID(x, y);

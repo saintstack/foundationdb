@@ -1415,8 +1415,13 @@ public:
 				}
 				self->timerTime = std::max(self->timerTime, self->time);
 			}
-			// if (!randLog/* && now() >= 32.0*/)
-			//	randLog = fopen("randLog.txt", "wt");
+			if (!randLog /* && now() >= 32.0*/) {
+				randLog = fopen("randLog.txt", "at");
+				if (randLog) {
+					fprintf(randLog, "\n=== NEW RUN STARTED ===\n");
+					fflush(randLog);
+				}
+			}
 
 			self->taskQueue.processReadyTimers(self->time);
 			self->taskQueue.processThreadReady();
