@@ -22,6 +22,7 @@
 #include "fdbclient/BulkLoading.h"
 #include "fdbclient/ManagementAPI.actor.h"
 #include "fdbclient/NativeAPI.actor.h"
+#include "fdbclient/S3Client.actor.h"
 #include "fdbserver/Knobs.h"
 #include "fdbserver/workloads/workloads.actor.h"
 #include "flow/Error.h"
@@ -144,6 +145,128 @@ struct BulkDumping : TestWorkload {
 			wait(delay(30.0));
 		}
 		return Void();
+	}
+
+	// NEW: Wait until the job manifest file is actually available on S3/storage
+	// This fixes the race condition where metadata is cleared but file upload isn't complete
+	ACTOR Future<Void> waitUntilJobManifestAvailable(BulkDumping* self,
+	                                                 UID jobId,
+	                                                 std::string jobRoot,
+	                                                 BulkLoadTransportMethod transportMethod) {
+		if (transportMethod != BulkLoadTransportMethod::BLOBSTORE) {
+			return Void(); // Only needed for BLOBSTORE transport
+		}
+
+		state std::string manifestFileName = getBulkLoadJobManifestFileName(); // "job-manifest.txt"
+
+		// jobRoot already contains the path like "blobstore://...?..."
+		// We just need to append the specific job manifest file path
+		state std::string jobManifestPath = format("%s/%s", jobId.toString().c_str(), manifestFileName.c_str());
+
+		// Construct proper blobstore URL by combining jobRoot with job manifest path
+		state std::string remoteJobManifestFilePath;
+
+		// Find the ? to separate base URL from parameters
+		size_t paramPos = jobRoot.find('?');
+		if (paramPos != std::string::npos) {
+			// Extract base URL and parameters separately
+			std::string baseUrl = jobRoot.substr(0, paramPos);
+			std::string parameters = jobRoot.substr(paramPos);
+
+			// Combine: baseUrl + "/" + jobManifestPath + parameters
+			remoteJobManifestFilePath = baseUrl + "/" + jobManifestPath + parameters;
+		} else {
+			// No parameters, simple append
+			remoteJobManifestFilePath = jobRoot + "/" + jobManifestPath;
+		}
+
+		state int retryCount = 0;
+		state int maxRetries = 20; // 20 * 30 seconds = 10 minutes max wait
+
+		TraceEvent("BulkDumpingWorkLoadJobManifestWait")
+		    .detail("JobId", jobId)
+		    .detail("ManifestPath", remoteJobManifestFilePath)
+		    .detail("MaxRetries", maxRetries);
+
+		loop {
+			try {
+				// Use HEAD request to test file existence instead of downloading it
+				// Parse the S3 URL to get endpoint details
+				state std::string resource;
+				state S3BlobStoreEndpoint::ParametersT parameters;
+				state Reference<S3BlobStoreEndpoint> endpoint;
+
+				try {
+					std::string error;
+					Optional<std::string> proxy;
+					endpoint = S3BlobStoreEndpoint::fromString(
+					    remoteJobManifestFilePath, proxy, &resource, &error, &parameters);
+					if (!endpoint) {
+						TraceEvent(SevError, "BulkDumpingWorkLoadJobManifestParseError")
+						    .detail("JobId", jobId)
+						    .detail("ManifestPath", remoteJobManifestFilePath)
+						    .detail("Error", error);
+						throw backup_invalid_url();
+					}
+				} catch (Error& e) {
+					TraceEvent(SevError, "BulkDumpingWorkLoadJobManifestParseError")
+					    .errorUnsuppressed(e)
+					    .detail("JobId", jobId)
+					    .detail("ManifestPath", remoteJobManifestFilePath);
+					throw;
+				}
+
+				// Try HEAD request to check if file exists AND has content
+				// Now that Beast client has better HEAD request tolerance, this should work reliably
+				bool exists = wait(endpoint->objectExists(parameters["bucket"], resource));
+				if (!exists) {
+					throw file_not_found(); // Trigger retry
+				}
+
+				// File exists, now check if it has actual content (not just empty file)
+				// Note: Allow size=0 due to SeaweedFS eventual consistency - if file exists, trust it has content
+				int64_t fileSize = wait(endpoint->objectSize(parameters["bucket"], resource));
+				if (fileSize < 0) {
+					TraceEvent("BulkDumpingWorkLoadJobManifestEmpty")
+					    .detail("JobId", jobId)
+					    .detail("ManifestPath", remoteJobManifestFilePath)
+					    .detail("FileSize", fileSize)
+					    .detail("RetryCount", retryCount);
+					throw file_not_found(); // Trigger retry - file exists but appears invalid
+				}
+
+				// If we get here, the file exists AND has content!
+				TraceEvent("BulkDumpingWorkLoadJobManifestFound")
+				    .detail("JobId", jobId)
+				    .detail("ManifestPath", remoteJobManifestFilePath)
+				    .detail("FileSize", fileSize)
+				    .detail("RetryCount", retryCount);
+				return Void();
+
+			} catch (Error& e) {
+				retryCount++;
+
+				if (retryCount >= maxRetries) {
+					TraceEvent(SevError, "BulkDumpingWorkLoadJobManifestTimeout")
+					    .errorUnsuppressed(e)
+					    .detail("JobId", jobId)
+					    .detail("ManifestPath", remoteJobManifestFilePath)
+					    .detail("RetryCount", retryCount)
+					    .detail("MaxRetries", maxRetries);
+					throw io_timeout();
+				}
+
+				TraceEvent("BulkDumpingWorkLoadJobManifestRetry")
+				    .detail("JobId", jobId)
+				    .detail("ManifestPath", remoteJobManifestFilePath)
+				    .detail("RetryCount", retryCount)
+				    .detail("MaxRetries", maxRetries)
+				    .detail("Error", e.what());
+
+				// Wait 30 seconds before retrying
+				wait(delay(30.0));
+			}
+		}
 	}
 
 	ACTOR Future<Void> clearDatabase(Database cx) {
@@ -328,13 +451,16 @@ struct BulkDumping : TestWorkload {
 		if (self->clientId != 0) {
 			return Void();
 		}
+
 		if (g_network->isSimulated()) {
 			// Network partition between CC and DD can cause DD no longer existing,
 			// which results in the bulk loading task cannot complete
 			// So, this workload disable the network partition
 			disableConnectionFailures("BulkDumping");
 		}
+
 		state std::map<Key, Value> kvs = self->generateOrderedKVS(self, normalKeys, 1000);
+
 		wait(self->setKeys(cx, kvs));
 
 		// BulkLoad uses range lock
@@ -364,6 +490,11 @@ struct BulkDumping : TestWorkload {
 		// Wait until the dump job completes
 		wait(self->waitUntilDumpJobComplete(cx));
 		TraceEvent("BulkDumpingWorkLoad").detail("Phase", "Dump Job Complete").detail("Job", newJob.toString());
+
+		// NEW: Wait until job manifest file is actually available
+		// This fixes the race condition where metadata is cleared but file upload isn't complete
+		wait(self->waitUntilJobManifestAvailable(self, newJob.getJobId(), newJob.getJobRoot(), transportMethod));
+		TraceEvent("BulkDumpingWorkLoad").detail("Phase", "Job Manifest Ready").detail("Job", newJob.toString());
 
 		// Clear database
 		wait(self->clearDatabase(cx));

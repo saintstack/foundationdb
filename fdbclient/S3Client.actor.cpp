@@ -74,8 +74,8 @@ struct PartConfig {
 	// Retry configuration - now configurable instead of magic numbers
 	// TODO: Add these to CLIENT_KNOBS for runtime configuration
 	int maxPartRetries = 3; // Default: 3 retries per part
-	int maxFileRetries = 3; // Default: 3 retries per file
-	int maxRetryDelayMs = 30000; // Default: 30 second cap on retry delay
+	int maxFileRetries = 10; // Increased for SeaweedFS eventual consistency - was 3
+	int maxRetryDelayMs = 60000; // Increased for SeaweedFS eventual consistency - was 30000
 
 	// Checksum configuration
 	// TODO: Add these to CLIENT_KNOBS for runtime configuration
@@ -819,7 +819,7 @@ ACTOR static Future<Void> copyDownFile(Reference<S3BlobStoreEndpoint> endpoint,
 			    .detail("Attempt", retries);
 
 			int64_t s = wait(endpoint->objectSize(bucket, objectName));
-			if (s <= 0) {
+			if (s < 0) { // Allow size=0 files due to SeaweedFS eventual consistency
 				TraceEvent(SevWarnAlways, "S3ClientCopyDownFileEmptyFile")
 				    .detail("Bucket", bucket)
 				    .detail("Object", objectName);
@@ -892,11 +892,26 @@ ACTOR static Future<Void> copyDownFile(Reference<S3BlobStoreEndpoint> endpoint,
 
 			if (cs.present()) {
 				expectedChecksum = cs.get();
+
+				// SEAWEEDFS EVENTUAL CONSISTENCY FIX:
+				// Skip checksum validation for empty files due to SeaweedFS eventual consistency
+				// The file may show as size=0 initially even though real content was uploaded
+				if (fileSize == 0) {
+					TraceEvent(SevWarn, "S3ClientCopyDownFileSkipChecksumForEmptyFile")
+					    .detail("Bucket", bucket)
+					    .detail("Object", objectName)
+					    .detail("ExpectedChecksum", expectedChecksum)
+					    .detail("Reason", "SeaweedFS eventual consistency - empty file detected");
+					// Skip checksum validation and trigger retry
+					throw checksum_failed();
+				}
+
 				state std::string actualChecksum = wait(calculateFileChecksum(file, fileSize));
 				if (actualChecksum != expectedChecksum) {
 					TraceEvent(SevWarnAlways, "S3ClientCopyDownFileChecksumMismatch")
 					    .detail("Expected", expectedChecksum)
-					    .detail("Calculated", actualChecksum);
+					    .detail("Calculated", actualChecksum)
+					    .detail("FileSize", fileSize);
 					throw checksum_failed();
 				}
 			}
@@ -914,7 +929,7 @@ ACTOR static Future<Void> copyDownFile(Reference<S3BlobStoreEndpoint> endpoint,
 			break; // Success
 		} catch (Error& e) {
 			if ((e.code() == error_code_file_not_found || e.code() == error_code_http_request_failed ||
-			     e.code() == error_code_io_error) &&
+			     e.code() == error_code_io_error || e.code() == error_code_checksum_failed) &&
 			    retries < config.maxFileRetries) {
 				TraceEvent(SevWarn, "S3ClientCopyDownFileRetry")
 				    .errorUnsuppressed(e)

@@ -1415,13 +1415,18 @@ public:
 				}
 				self->timerTime = std::max(self->timerTime, self->time);
 			}
-			if (!randLog /* && now() >= 32.0*/) {
-				randLog = fopen("randLog.txt", "at");
-				if (randLog) {
-					fprintf(randLog, "\n=== NEW RUN STARTED ===\n");
-					fflush(randLog);
-				}
-			}
+			// DISABLED: randLog for clean determinism testing
+			// if (!randLog && self->time >= 1.0) {
+			// 	printf("RANDLOG: Starting logging at simulation time %.1f\n", self->time);
+			// 	randLog = fopen("randLog_filtered.txt", "at");
+			// 	if (randLog) {
+			// 		fprintf(randLog, "\n=== NEW RUN STARTED AT %.1f ===\n", self->time);
+			// 		fflush(randLog);
+			// 		printf("RANDLOG: Successfully opened randLog_filtered.txt\n");
+			// 	} else {
+			// 		printf("RANDLOG: Failed to open randLog_filtered.txt\n");
+			// 	}
+			// }
 
 			self->taskQueue.processReadyTimers(self->time);
 			self->taskQueue.processThreadReady();
@@ -2655,12 +2660,18 @@ public:
 				killProcess(t.machine, KillType::KillInstantly);
 			}
 
-			if (randLog)
-				fmt::print(randLog,
-				           "T {0} {1} {2}\n",
-				           this->time,
-				           int(deterministicRandom()->peek() % 10000),
-				           t.machine ? t.machine->name : "none");
+			if (randLog) {
+				static int logCounter = 0;
+				// Only log every 100th timer event to reduce volume
+				if ((++logCounter % 100) == 0) {
+					fmt::print(randLog,
+					           "T {0} {1} {2} #{3}\n",
+					           this->time,
+					           int(deterministicRandom()->peek() % 10000),
+					           t.machine ? t.machine->name : "none",
+					           logCounter);
+				}
+			}
 		}
 	}
 

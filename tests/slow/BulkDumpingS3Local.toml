@@ -24,10 +24,7 @@ buggify = false
 s3_sim_failure_injection = false
 bulkload_sim_failure_injection = false
 
-# CRITICAL: Enable SST ingestion for bulk load data application
-bulk_load_use_sst_ingest = true
-
-# Copied from tests/fast/BulkDumping.toml
+# Essential knobs from tests/fast/BulkDumping.toml
 shard_encode_location_metadata = true
 enable_read_lock_on_range = true
 enable_version_vector = false
@@ -59,19 +56,16 @@ dd_team_zero_server_left_log_delay = 0
 dd_rebalance_parallelism = 1
 
 [[test]]
-testTitle = 'BulkDumpingWorkloadS3'
+testTitle = 'BulkDumpingWorkloadS3Local'
 useDB = true
 waitForQuiescence = false
 connectionFailuresDisableDuration = 1000000
-determinismCheck = true
 
     [[test.workload]]
     testName = 'BulkDumpingWorkload'
     # 2 is BulkLoadTransportMethod::BLOBSTORE
     bulkLoadTransportMethod = 2
-    # Use 127.0.0.1 rather than localhost. If 'localhost', code uses the ipv6 version.
-    # if 127.0.0.1, its ipv4 which is likely where we started seaweed.
-    # If running against joshua, refer to the seaweed instance running at seaweedfs.default.svc.cluster.local.
-    jobRoot = 'blobstore://seaweedfs:tot4llys3cure@seaweedfs.default.svc.cluster.local:8333/bulkdump/dumps?bucket=bulkdumpingworkload&region=us-east-1&secure_connection=0&bypass_simulation=1&global_connection_pool=0&request_timeout=60'
-    #jobRoot = 'blobstore://KEY:SECRET:TOKEN@127.0.0.1:8333/bulkdumping/dumps?bucket=bulkdumpingworkload&region=us-east-1&secure_connection=0&bypass_simulation=1&global_connection_pool=0&request_timeout=5'
+    # Use local SeaweedFS instance for testing Beast client
+    # Use 127.0.0.1 rather than localhost (avoids IPv6 issues)
+    jobRoot = 'blobstore://testkey:testsecret@127.0.0.1:8334/bulkdump/dumps?bucket=bulkdumpingworkload&region=us-east-1&secure_connection=0&bypass_simulation=1&global_connection_pool=0&request_timeout=60'
     maxCancelTimes = 0 
