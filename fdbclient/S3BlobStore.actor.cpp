@@ -1902,12 +1902,6 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
                                                                int contentLen,
                                                                std::set<unsigned int> successCodes) {
 
-	// DETERMINISM DEBUG: Log entry to S3 operation
-	TraceEvent(SevInfo, "S3OperationStart")
-	    .detail("Verb", verb)
-	    .detail("Resource", resource)
-	    .detail("SimTime", g_network->now());
-
 	state UnsentPacketQueue contentCopy;
 	state UnsentPacketQueue dryrunContentCopy; // NonCopyable state var so must be declared at top of actor
 	state Reference<HTTP::OutgoingRequest> req = makeReference<HTTP::OutgoingRequest>();

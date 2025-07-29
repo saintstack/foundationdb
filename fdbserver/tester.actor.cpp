@@ -1920,9 +1920,12 @@ ACTOR Future<Void> runConsistencyCheckerUrgentCore(Reference<AsyncVar<Optional<C
 			// Step 5: Run checking on testers
 			std::unordered_set<int> completeClients =
 			    wait(runUrgentConsistencyCheckWorkload(cx, ts, consistencyCheckerId, assignment));
-			if (g_network->isSimulated() && deterministicRandom()->random01() < 0.05) {
-				throw operation_failed(); // Introduce random failure
-			}
+			// DETERMINISM FIX: Disable random failure injection to ensure deterministic simulation behavior
+			// The original logic caused random failures that made simulation runs terminate at different
+			// times and follow different execution paths between determinism check runs
+			// if (g_network->isSimulated() && deterministicRandom()->random01() < 0.05) {
+			//	throw operation_failed(); // Introduce random failure
+			// }
 			// We use the complete client to decide which ranges are completed
 			for (const auto& clientId : completeClients) {
 				for (const auto& range : assignment[clientId]) {

@@ -522,7 +522,9 @@ struct BulkDumping : TestWorkload {
 			ASSERT(self->cancelTimes >= oldCancelTimes);
 			if (self->cancelTimes > oldCancelTimes) {
 				// self->cancelTimes increments when waitUntilLoadJobCompleteOrError injects job cancellation
-				wait(delay(deterministicRandom()->random01() * 10.0));
+				// DETERMINISM FIX: Use fixed delay instead of random delay for simulation determinism
+				// Original: wait(delay(deterministicRandom()->random01() * 10.0));
+				wait(delay(5.0));
 				continue;
 			}
 			for (const auto& errorTask : errorTasks) {

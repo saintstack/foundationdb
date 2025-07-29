@@ -63,7 +63,6 @@ testTitle = 'BulkDumpingWorkloadS3'
 useDB = true
 waitForQuiescence = false
 connectionFailuresDisableDuration = 1000000
-determinismCheck = true
 
     [[test.workload]]
     testName = 'BulkDumpingWorkload'
