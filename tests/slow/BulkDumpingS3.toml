@@ -1,3 +1,6 @@
+# CRITICAL: Disable BUGGIFY for determinism - BUGGIFY injects random faults that destroy determinism
+buggify = false
+
 [configuration]
 storageEngineExcludeTypes = [5] #FIXME: remove after allowing to do bulkloading with fetchKey and shardedrocksdb
 
