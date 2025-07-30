@@ -80,4 +80,4 @@ The determinism analysis is designed to have minimal interference with the actua
 - The determinism check runs normally, overwriting trace files as expected
 - Only when a determinism check fails are the backed up files organized for analysis
 - Temporary backup files are automatically cleaned up after analysis setup
-- All analysis files are stored in a dedicated directory to avoid interference 
+- All analysis files are stored in a dedicated directory to avoid interference

@@ -113,14 +113,10 @@ PYTHON_CMD_ARGS=(
 if [ -n "${JOSHUA_TEST_FILES_DIR}" ]; then
     PYTHON_CMD_ARGS+=("--test-source-dir" "${JOSHUA_TEST_FILES_DIR}")
 else
-    # Default to current working directory + tests if JOSHUA_TEST_FILES_DIR is not set
-    # This handles the case where test files are extracted from tarball to current directory
-    if [ -d "tests" ]; then
-        PYTHON_CMD_ARGS+=("--test-source-dir" "tests")
-    elif [ -d "." ]; then
-        # Fallback: use current directory if tests/ doesn't exist
-        PYTHON_CMD_ARGS+=("--test-source-dir" ".")
-    fi
+    # TARBALL FIX: Don't override test directory when JOSHUA_TEST_FILES_DIR is not set
+    # This preserves the old behavior where TestHarness2 used its default logic
+    # which worked correctly with Joshua's tarball extraction
+    echo "No JOSHUA_TEST_FILES_DIR set - using TestHarness2 default test discovery" >&2
 fi
 
 if [ -n "${OLDBINDIR}" ]; then

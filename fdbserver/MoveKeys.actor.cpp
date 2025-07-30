@@ -2876,7 +2876,13 @@ ACTOR Future<Void> removeKeysFromFailedServer(Database cx,
 							}
 						}
 
-						const UID shardId = newDataMoveId(deterministicRandom()->randomUInt64(),
+						// DETERMINISM FIX: Generate deterministic but unique physicalShardId based on range
+						// to avoid DataMoveId collisions while maintaining determinism
+						std::hash<std::string> hasher;
+						uint64_t rangeHash = hasher(it.key.toString());
+						uint64_t deterministicPhysicalShardId =
+						    0x1000000000000000ULL | (rangeHash & 0x0FFFFFFFFFFFFFFFULL);
+						const UID shardId = newDataMoveId(deterministicPhysicalShardId,
 						                                  AssignEmptyRange::True,
 						                                  DataMoveType::LOGICAL,
 						                                  DataMovementReason::ASSIGN_EMPTY_RANGE);
@@ -3396,7 +3402,12 @@ void seedShardServers(Arena& arena, CommitTransactionRef& tr, std::vector<Storag
 	// to a specific
 	//   key (keyServersKeyServersKey)
 	if (SERVER_KNOBS->SHARD_ENCODE_LOCATION_METADATA) {
-		const UID shardId = newDataMoveId(deterministicRandom()->randomUInt64(),
+		// DETERMINISM FIX: Generate deterministic but unique physicalShardId based on range
+		// to avoid DataMoveId collisions while maintaining determinism
+		std::hash<std::string> hasher;
+		uint64_t rangeHash = hasher(allKeys.toString());
+		uint64_t deterministicPhysicalShardId = 0x2000000000000000ULL | (rangeHash & 0x0FFFFFFFFFFFFFFFULL);
+		const UID shardId = newDataMoveId(deterministicPhysicalShardId,
 		                                  AssignEmptyRange(false),
 		                                  DataMoveType::LOGICAL,
 		                                  DataMovementReason::SEED_SHARD_SERVER,

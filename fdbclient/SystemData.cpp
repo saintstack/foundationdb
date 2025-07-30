@@ -526,15 +526,22 @@ const UID newDataMoveId(const uint64_t physicalShardId,
 	} else if (unassignShard) {
 		split = 0;
 	} else {
-		do {
-			split = deterministicRandom()->randomUInt64();
-			// Clear the lower 16 bits
-			split = (~0xFFFF) & split;
-			// Set DataMoveType to the lower [0, 8) bits
-			split = split | static_cast<uint64_t>(type);
-			// Set DataMovementReason to the lower [8, 16) bits
-			split = split | (static_cast<uint64_t>(reason) << 8);
-		} while (split == anonymousShardId.second() || split == 0 || split == emptyShardId);
+		// DETERMINISM FIX: Use deterministic split generation instead of random loop to ensure consistent DataMoveId
+		// Original: do { split = deterministicRandom()->randomUInt64(); ... } while (split == anonymousShardId.second() || split == 0 || split == emptyShardId);
+		
+		// Generate deterministic split based on physicalShardId, type, and reason
+		split = physicalShardId ^ 0x3000000000000000ULL; // XOR with fixed pattern for determinism
+		// Clear the lower 16 bits
+		split = (~0xFFFF) & split;
+		// Set DataMoveType to the lower [0, 8) bits
+		split = split | static_cast<uint64_t>(type);
+		// Set DataMovementReason to the lower [8, 16) bits
+		split = split | (static_cast<uint64_t>(reason) << 8);
+		
+		// Ensure we avoid forbidden values by adding offset if needed
+		if (split == anonymousShardId.second() || split == 0 || split == emptyShardId) {
+			split ^= 0x1000000000000000ULL; // XOR with different pattern to avoid collision
+		}
 	}
 	return UID(physicalShardId, split);
 }

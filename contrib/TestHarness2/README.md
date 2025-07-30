@@ -20,7 +20,7 @@ TestHarness2 includes built-in support for analyzing determinism check failures.
 
 When determinism checks fail, analysis files are created in:
 ```
-<run_temp_dir>/determinism_analysis_{uid}/
+<run_temp_dir>/<test_uid>/determinism_analysis_{uid}/
 ├── initial_run/          # Trace files from first run
 ├── determinism_check/    # Trace files from second run  
 └── README.txt           # Analysis instructions

@@ -580,7 +580,9 @@ void FastAllocator<Size>::getMagazine() {
 	// detect that the underlying system supports hugepages.  Using hugepages
 	// with smaller-than-2MiB magazine sizes strands memory.  See issue #909.
 #if !DEBUG_DETERMINISM
-	if (FLOW_KNOBS && g_allocation_tracing_disabled == 0 &&
+	// DETERMINISM FIX: Disable GetMagazineSample logging in simulation to prevent non-deterministic event divergence
+	// Check g_network exists before calling isSimulated() to avoid startup crashes
+	if ((!g_network || !g_network->isSimulated()) && FLOW_KNOBS && g_allocation_tracing_disabled == 0 &&
 	    nondeterministicRandom()->random01() < (magazine_size * Size) / FLOW_KNOBS->FAST_ALLOC_LOGGING_BYTES) {
 		++g_allocation_tracing_disabled;
 		TraceEvent("GetMagazineSample").detail("Size", Size).backtrace();

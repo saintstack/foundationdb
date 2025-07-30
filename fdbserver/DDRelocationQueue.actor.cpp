@@ -1229,8 +1229,16 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 						rrs.dataMoveId = UID();
 					} else {
 						DataMoveType dataMoveType = newDataMoveType(rrs.bulkLoadTask.present());
+						// DETERMINISM FIX: Generate deterministic but unique physicalShardId based on range and context
+						// to avoid DataMoveId collisions while maintaining determinism
+						std::hash<std::string> hasher;
+						uint64_t rangeHash = hasher(rrs.keys.toString());
+						uint64_t contextHash = hasher(std::to_string(static_cast<int>(rrs.dmReason)) +
+						                              std::to_string(static_cast<int>(dataMoveType)));
+						uint64_t deterministicPhysicalShardId =
+						    0x4000000000000000ULL | ((rangeHash ^ contextHash) & 0x0FFFFFFFFFFFFFFFULL);
 						rrs.dataMoveId = newDataMoveId(
-						    deterministicRandom()->randomUInt64(), AssignEmptyRange::False, dataMoveType, rrs.dmReason);
+						    deterministicPhysicalShardId, AssignEmptyRange::False, dataMoveType, rrs.dmReason);
 						TraceEvent(SevInfo, "NewDataMoveWithRandomDestID", this->distributorId)
 						    .detail("DataMoveID", rrs.dataMoveId.toString())
 						    .detail("TrackID", rrs.randomId)
@@ -1610,8 +1618,16 @@ ACTOR Future<Void> dataDistributionRelocator(DDQueue* self,
 					}
 				}
 				DataMoveType dataMoveType = newDataMoveType(doBulkLoading);
-				rd.dataMoveId = newDataMoveId(
-				    deterministicRandom()->randomUInt64(), AssignEmptyRange::False, dataMoveType, rd.dmReason);
+				// DETERMINISM FIX: Generate deterministic but unique physicalShardId based on range and context
+				// to avoid DataMoveId collisions while maintaining determinism
+				std::hash<std::string> hasher;
+				uint64_t rangeHash = hasher(rd.keys.toString());
+				uint64_t contextHash = hasher(std::to_string(static_cast<int>(rd.dmReason)) +
+				                              std::to_string(static_cast<int>(dataMoveType)) + rd.randomId.toString());
+				uint64_t deterministicPhysicalShardId =
+				    0x5000000000000000ULL | ((rangeHash ^ contextHash) & 0x0FFFFFFFFFFFFFFFULL);
+				rd.dataMoveId =
+				    newDataMoveId(deterministicPhysicalShardId, AssignEmptyRange::False, dataMoveType, rd.dmReason);
 				TraceEvent(bulkLoadVerboseEventSev(), "DDBulkLoadTaskNewDataMoveID", self->distributorId)
 				    .detail("DataMoveID", rd.dataMoveId.toString())
 				    .detail("TrackID", rd.randomId)

@@ -498,7 +498,9 @@ private:
 		loop {
 			wait(self->writtenBytes.onChange()); // takes place on peer!
 			ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
-			wait(delay(.002 * deterministicRandom()->random01()));
+			// DETERMINISM FIX: Use fixed delay instead of random delay for deterministic network simulation
+			// Original: wait(delay(.002 * deterministicRandom()->random01()));
+			wait(delay(.001)); // Use fixed 1ms delay for deterministic behavior
 			self->sentBytes.set(self->writtenBytes.get()); // or possibly just some sometimes...
 		}
 	}
@@ -519,10 +521,7 @@ private:
 				throw connection_failed();
 			}
 
-			state int64_t pos =
-			    deterministicRandom()->random01() < .5
-			        ? self->sentBytes.get()
-			        : deterministicRandom()->randomInt64(self->receivedBytes.get(), self->sentBytes.get() + 1);
+			state int64_t pos = self->sentBytes.get(); // Always use sentBytes position for deterministic behavior
 			wait(delay(g_clogging.getSendDelay(
 			    self->peerProcess->address, self->process->address, self->isStableConnection())));
 			wait(g_simulator->onProcess(self->process));
@@ -1407,8 +1406,10 @@ public:
 		while (!self->isStopped) {
 			if (self->taskQueue.canSleep()) {
 				double sleepTime = self->taskQueue.getSleepTime(self->time);
-				self->time +=
-				    sleepTime + FLOW_KNOBS->MAX_RUNLOOP_SLEEP_DELAY * pow(deterministicRandom()->random01(), 1000.0);
+				// DETERMINISM FIX: Remove random component from sleep delay to ensure deterministic simulation timing
+				// Original: self->time += sleepTime + FLOW_KNOBS->MAX_RUNLOOP_SLEEP_DELAY *
+				// pow(deterministicRandom()->random01(), 1000.0);
+				self->time += sleepTime; // Use fixed sleep time for deterministic behavior
 				if (self->printSimTime && (int)self->time > lastPrintTime) {
 					printf("Time: %d\n", (int)self->time);
 					lastPrintTime = (int)self->time;

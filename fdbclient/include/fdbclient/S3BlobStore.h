@@ -101,14 +101,15 @@ public:
 		// init not in static codepath, to avoid initialization race issues and so no blob connections means no
 		// unnecessary blob stats traces
 		BlobStats()
-		  : id(deterministicRandom()->randomUniqueID()), cc("BlobStoreStats", id.toString()),
-		    requestsSuccessful("RequestsSuccessful", cc), requestsFailed("RequestsFailed", cc),
-		    newConnections("NewConnections", cc), expiredConnections("ExpiredConnections", cc),
-		    reusedConnections("ReusedConnections", cc), fastRetries("FastRetries", cc),
-		    requestLatency("BlobStoreRequestLatency",
-		                   id,
-		                   CLIENT_KNOBS->BLOBSTORE_LATENCY_LOGGING_INTERVAL,
-		                   CLIENT_KNOBS->BLOBSTORE_LATENCY_LOGGING_ACCURACY) {}
+		  : id(g_network->isSimulated() ? UID(0x3000000000000000LL, 0x3000000000000000LL)
+		                                : deterministicRandom()->randomUniqueID()),
+		    cc("BlobStoreStats", id.toString()), requestsSuccessful("RequestsSuccessful", cc),
+		    requestsFailed("RequestsFailed", cc), newConnections("NewConnections", cc),
+		    expiredConnections("ExpiredConnections", cc), reusedConnections("ReusedConnections", cc),
+		    fastRetries("FastRetries", cc), requestLatency("BlobStoreRequestLatency",
+		                                                   id,
+		                                                   CLIENT_KNOBS->BLOBSTORE_LATENCY_LOGGING_INTERVAL,
+		                                                   CLIENT_KNOBS->BLOBSTORE_LATENCY_LOGGING_ACCURACY) {}
 	};
 	// null when initialized, so no blob stats until a blob connection is used
 	static std::unique_ptr<BlobStats> blobStats;

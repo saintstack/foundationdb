@@ -640,9 +640,9 @@ class TestRunner:
         backup_dir = temp_dir / f"trace_backup_{seed}"
         backup_dir.mkdir(exist_ok=True)
         
-        # Copy (don't move) trace files to backup
+        # Move trace files to backup (avoid leaving duplicates in main directory)
         for trace_file in trace_files:
-            shutil.copy2(trace_file, backup_dir / trace_file.name)
+            shutil.move(trace_file, backup_dir / trace_file.name)
             
         print(f"Backed up {len(trace_files)} trace files to {backup_dir}", file=sys.stderr)
 
@@ -671,13 +671,12 @@ class TestRunner:
         for trace_file in backup_dir.glob("trace.*.json"):
             shutil.move(trace_file, initial_run_dir / trace_file.name)
         
-        # Move ONLY the determinism check traces (exclude duplicates of initial run)
+        # Move ALL remaining trace files to determinism_check directory
+        # (Since initial traces were moved to backup, these should all be from determinism check)
         current_traces = list(temp_dir.glob("trace.*.json"))
         
         for trace_file in current_traces:
-            # Only copy traces that are NOT duplicates of the initial run
-            if trace_file.name not in initial_trace_names:
-                shutil.move(trace_file, determinism_check_dir / trace_file.name)
+            shutil.move(trace_file, determinism_check_dir / trace_file.name)
         
         # Clean up backup directory
         shutil.rmtree(backup_dir)
