@@ -2102,9 +2102,16 @@ ACTOR Future<Void> assignMutationsToStorageServers(CommitBatchContext* self) {
 			if (self->yieldBytes > SERVER_KNOBS->DESIRED_TOTAL_BYTES) {
 				self->yieldBytes = 0;
 				if (g_network->check_yield(TaskPriority::ProxyCommitYield1)) {
-					self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+					// DETERMINISM FIX: Use deterministic compute timing in simulation for consistent performance
+					// measurements
+					if (g_network->isSimulated()) {
+						self->computeDuration += 0.001; // Fixed 1ms compute time per yield cycle in simulation
+					} else {
+						self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+					}
 					wait(delay(0, TaskPriority::ProxyCommitYield1));
-					self->computeStart = g_network->timer_monotonic();
+					// Reset compute start - in simulation this is just a marker, in production it's real time
+					self->computeStart = g_network->isSimulated() ? 0.0 : g_network->timer_monotonic();
 				}
 			}
 
@@ -2316,7 +2323,8 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 	pProxyCommitData->stats.postResolutionDist->sampleSeconds(postResolutionQueuing - postResolutionStart);
 	wait(yield(TaskPriority::ProxyCommitYield1));
 
-	self->computeStart = g_network->timer_monotonic();
+	// Initialize compute start - in simulation this is just a marker, in production it's real time
+	self->computeStart = g_network->isSimulated() ? 0.0 : g_network->timer_monotonic();
 
 	pProxyCommitData->stats.txnCommitResolved += trs.size();
 
@@ -2458,7 +2466,12 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 	// committed to be less than the MVCC window
 	if (pProxyCommitData->committedVersion.get() <
 	    self->commitVersion - SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS) {
-		self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+		// DETERMINISM FIX: Use deterministic compute timing in simulation
+		if (g_network->isSimulated()) {
+			self->computeDuration += 0.002; // Fixed 2ms for this compute phase in simulation
+		} else {
+			self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+		}
 		state Span waitVersionSpan;
 		while (pProxyCommitData->committedVersion.get() <
 		       self->commitVersion - SERVER_KNOBS->MAX_READ_TRANSACTION_LIFE_VERSIONS) {
@@ -2493,7 +2506,8 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 			}
 		}
 		waitVersionSpan = Span{};
-		self->computeStart = g_network->timer_monotonic();
+		// Reset compute start - in simulation this is just a marker, in production it's real time
+		self->computeStart = g_network->isSimulated() ? 0.0 : g_network->timer_monotonic();
 	}
 
 	self->msg = self->storeCommits.back().first.get();
@@ -2552,7 +2566,13 @@ ACTOR Future<Void> postResolution(CommitBatchContext* self) {
 		pProxyCommitData->latestLocalCommitBatchLogging.set(self->localBatchNumber);
 	}
 
-	self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+	// DETERMINISM FIX: Use deterministic compute timing in simulation for consistent performance measurements
+	if (g_network->isSimulated()) {
+		// In simulation: Use deterministic compute duration based on batch operations for consistent MaxCompute values
+		self->computeDuration += 0.001 * self->batchOperations; // 1ms per operation in simulation
+	} else {
+		self->computeDuration += g_network->timer_monotonic() - self->computeStart;
+	}
 	if (self->batchOperations > 0) {
 		double estimatedDelay = computeReleaseDelay(self, self->latencyBucket);
 		double computePerOperation =

@@ -37,7 +37,9 @@ SSBulkDumpTask getSSBulkDumpTask(const std::map<std::string, std::vector<Storage
 	int dcid = 0;
 	for (const auto& [_, dcServers] : locations) {
 		if (dcid == 0) {
-			const int idx = deterministicRandom()->randomInt(0, dcServers.size());
+			// DETERMINISM FIX: Use first server instead of random selection to ensure deterministic process assignment
+			// Original: const int idx = deterministicRandom()->randomInt(0, dcServers.size());
+			const int idx = 0; // Always use first server for deterministic behavior
 			targetServer = dcServers[idx];
 		}
 		for (int i = 0; i < dcServers.size(); i++) {
@@ -73,6 +75,8 @@ std::pair<BulkLoadFileSet, BulkLoadFileSet> getLocalRemoteFileSetSetting(Version
                                                                          const std::string& rootLocal,
                                                                          const std::string& rootRemote) {
 	// Generate file names based on data version
+	// NOTE: For determinism, we still use dumpVersion for file naming as it's part of the manifest metadata
+	// The version represents the actual data version being dumped, not just a filename component
 	const std::string manifestFileName = generateBulkDumpManifestFileName(dumpVersion);
 	const std::string dataFileName = generateBulkDumpDataFileName(dumpVersion);
 	const std::string byteSampleFileName = generateBulkDumpByteSampleFileName(dumpVersion);

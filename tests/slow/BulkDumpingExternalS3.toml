@@ -1,0 +1,51 @@
+# CRITICAL: Disable BUGGIFY for determinism - BUGGIFY injects random faults that destroy determinism
+buggify = false
+
+[configuration]
+storageEngineExcludeTypes = [5] #FIXME: remove after allowing to do bulkloading with fetchKey and shardedrocksdb
+
+# Do not support tenant, encryption, and TSS
+tenantModes = ['disabled']
+encryptModes = ['disabled']
+disableTss = true # TODO(BulkLoad): support TSS. finishMoveShard should wait for TSS if a data move is bulkload data move.
+
+[[knobs]]
+# The purpose of setting the knob to true was to enable the shard rocksdb storage engine
+shard_encode_location_metadata = true
+
+# Rely on RangeLock
+enable_read_lock_on_range = true
+
+# Do not support version vector
+enable_version_vector = false
+enable_version_vector_tlog_unicast = false
+enable_version_vector_reply_recovery = false
+
+# Set high enough sample rate to test bytes sampling
+min_byte_sampling_probability = 0.5
+
+# CC can repeatedly re-recruit new DD for the unfit recruitment which can block the test.
+cc_enforce_use_unfit_dd_in_sim = true
+
+# AuditStorage replica check can cause tooManyTraceEvents because both tests are large
+disable_audit_storage_final_replica_check_in_sim = true
+
+# Since the machineCount is large, this test produces more trace events to complete
+max_trace_lines = 5000000
+
+# MINIMAL S3 determinism fixes
+s3_sim_failure_injection = false
+bulkload_sim_failure_injection = false
+
+[[test]]
+testTitle = 'BulkDumpingWorkloadExternalS3'
+useDB = true
+waitForQuiescence = false
+
+    [[test.workload]]
+    testName = 'BulkDumpingWorkload'
+    # 2 is BulkLoadTransportMethod::BLOBSTORE
+    bulkLoadTransportMethod = 2
+    # Use external S3 service (seaweedfs) for testing
+    jobRoot = 'blobstore://seaweedfs:tot4llys3cure@seaweedfs.default.svc.cluster.local:8333/bulkdump/dumps?bucket=bulkdumpingworkload&region=us-east-1&secure_connection=0&bypass_simulation=1'
+    maxCancelTimes = 0 

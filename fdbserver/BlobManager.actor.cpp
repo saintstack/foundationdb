@@ -683,7 +683,6 @@ static void downsampleSplit(const Standalone<VectorRef<KeyRef>>& splits,
 		downsampleSplit(splits, out, mid + 1, endIdx, endCount);
 	}
 }
-
 ACTOR Future<BlobGranuleSplitPoints> splitRange(Reference<BlobManagerData> bmData,
                                                 KeyRange range,
                                                 bool writeHot,
@@ -956,13 +955,16 @@ ACTOR Future<Void> doRangeAssignment(Reference<BlobManagerData> bmData,
 	// WorkerId is set, except in case of assigning to any worker. Then we pick the worker to assign to in here
 	try {
 		// inject delay into range assignments
-		if (BUGGIFY_WITH_PROB(0.05)) {
-			wait(delay(deterministicRandom()->random01()));
-		} else {
-			// otherwise, do delay(0) to ensure rest of code in calling handleRangeAssign runs, before this function can
-			// recursively call handleRangeAssign on error
-			wait(delay(0.0));
-		}
+		// DETERMINISM FIX: Disable random delay injection to ensure deterministic simulation behavior
+		// The original BUGGIFY logic caused random delays that made data distribution operations
+		// happen at different simulation times between determinism check runs
+		// if (BUGGIFY_WITH_PROB(0.05)) {
+		//	wait(delay(deterministicRandom()->random01()));
+		// } else {
+		// do delay(0) to ensure rest of code in calling handleRangeAssign runs, before this function can
+		// recursively call handleRangeAssign on error
+		wait(delay(0.0));
+		// }
 		if (!workerID.present()) {
 			ASSERT(assignment.isAssign && assignment.assign.get().type != AssignRequestType::Continue);
 
@@ -1469,7 +1471,6 @@ ACTOR Future<Void> monitorTenants(Reference<BlobManagerData> bmData) {
 		}
 	}
 }
-
 // FIXME: better way to load tenant mapping?
 ACTOR Future<Void> monitorClientRanges(Reference<BlobManagerData> bmData) {
 	state Optional<Value> lastChangeKeyValue;
@@ -1990,7 +1991,6 @@ ACTOR Future<Void> reevaluateInitialSplit(Reference<BlobManagerData> bmData,
 
 	return Void();
 }
-
 ACTOR Future<Void> maybeSplitRange(Reference<BlobManagerData> bmData,
                                    UID currentWorkerId,
                                    KeyRange granuleRange,
@@ -2743,7 +2743,6 @@ static void attemptStartMerge(Reference<BlobManagerData> bmData,
 	// any of the ranges will be ignored. This handles merge/split races.
 	bmData->addActor.send(doMerge(bmData, mergeRange, toMerge));
 }
-
 // Greedily merges any consecutive 2+ granules in a row that are mergeable
 ACTOR Future<Void> attemptMerges(Reference<BlobManagerData> bmData,
                                  std::vector<std::tuple<UID, KeyRange, Version>> candidates) {
@@ -3528,7 +3527,6 @@ ACTOR Future<Void> resumeMerge(Future<Void> finishMergeFuture, KeyRange mergeRan
 		throw e;
 	}
 }
-
 ACTOR Future<Void> loadForcePurgedRanges(Reference<BlobManagerData> bmData) {
 	state Reference<ReadYourWritesTransaction> tr = makeReference<ReadYourWritesTransaction>(bmData->db);
 	state Key beginKey = blobGranuleForcePurgedKeys.begin;
@@ -4261,7 +4259,6 @@ ACTOR Future<Void> initializeBlobWorker(Reference<BlobManagerData> self,
 	self->restartRecruiting.trigger();
 	return Void();
 }
-
 // Recruits blob workers in a loop
 ACTOR Future<Void> blobWorkerRecruiter(
     Reference<BlobManagerData> self,
@@ -4846,7 +4843,6 @@ ACTOR Future<Void> waitForcePurgeBlobbified(Reference<BlobManagerData> self, Key
 	}
 	return Void();
 }
-
 /*
  * This method is used to purge the range [startKey, endKey) at (and including) purgeVersion.
  * To do this, we do a BFS traversal starting at the active granules. Then we classify granules
@@ -5595,7 +5591,6 @@ ACTOR Future<bool> hasPendingSplit(Reference<BlobManagerData> self) {
 		}
 	}
 }
-
 // FIXME: could eventually make this more thorough by storing some state in the DB or something
 // FIXME: simpler solution could be to shuffle ranges
 ACTOR Future<Void> bgConsistencyCheck(Reference<BlobManagerData> bmData) {

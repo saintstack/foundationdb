@@ -6093,9 +6093,9 @@ ACTOR Future<Void> bulkDumpQ(StorageServer* data, BulkDumpRequest req) {
 			// relativeFolder remains consistent between local path and remote path
 			state std::string relativeFolder = joinPath(taskFolder, std::to_string(batchNum));
 
-			// Get version to dump
-			tr.reset();
-			wait(store(versionToDump, tr.getReadVersion()));
+					// Get version to dump
+		tr.reset();
+		wait(store(versionToDump, tr.getReadVersion()));
 
 			// Read data
 			// TODO(BulkDump): Read data from other servers at the versionToDump as much as possible

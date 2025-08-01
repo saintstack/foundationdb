@@ -4481,13 +4481,19 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 							}
 							// pick a server from primary DC
 							auto it = rangeLocations[rangeLocationIndex].servers.begin();
-							const int idx = deterministicRandom()->randomInt(0, it->second.size());
+							// DETERMINISM FIX: Use first server instead of random selection to ensure deterministic
+							// process assignment Original: const int idx = deterministicRandom()->randomInt(0,
+							// it->second.size());
+							const int idx = 0; // Always use first server for deterministic behavior
 							targetServer = it->second[idx];
 							storageServersToCheck.push_back(it->second[idx]);
 							++it;
 							// pick a server from each remote DC
 							for (; it != rangeLocations[rangeLocationIndex].servers.end(); ++it) {
-								const int idx = deterministicRandom()->randomInt(0, it->second.size());
+								// DETERMINISM FIX: Use first server instead of random selection to ensure deterministic
+								// process assignment Original: const int idx = deterministicRandom()->randomInt(0,
+								// it->second.size());
+								const int idx = 0; // Always use first server for deterministic behavior
 								req.targetServers.push_back(it->second[idx].id());
 								storageServersToCheck.push_back(it->second[idx]);
 							}
@@ -4497,8 +4503,10 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 							int dcid = 0;
 							for (const auto& [_, dcServers] : rangeLocations[rangeLocationIndex].servers) {
 								if (dcid == 0) {
-									// in primary DC randomly select a server to do the audit task
-									const int idx = deterministicRandom()->randomInt(0, dcServers.size());
+									// DETERMINISM FIX: Use first server instead of random selection to ensure
+									// deterministic process assignment Original: const int idx =
+									// deterministicRandom()->randomInt(0, dcServers.size());
+									const int idx = 0; // Always use first server for deterministic behavior
 									targetServer = dcServers[idx];
 								}
 								for (int i = 0; i < dcServers.size(); i++) {

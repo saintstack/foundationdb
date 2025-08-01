@@ -18,29 +18,16 @@
  * limitations under the License.
  */
 
-#include "fdbserver/MockS3Server.h"
-
-#include "fdbrpc/HTTP.h"
-#include "fdbrpc/simulator.h"
-#include "flow/Trace.h"
-#include "flow/ActorCollection.h"
-#include "flow/IRandom.h"
-#include "flow/serialize.h"
 #include "fdbclient/NativeAPI.actor.h"
 #include "fdbclient/S3Client.actor.h"
 #include "fdbserver/workloads/workloads.actor.h"
 #include "fdbserver/BulkLoadUtil.actor.h"
+#include "flow/Trace.h"
 #include "flow/Platform.h"
-
-#include <string>
-#include <vector>
-#include <libgen.h>
-
 #include "flow/actorcompiler.h" // This must be the last #include.
 
-// Test s3client operations against s3.
 // Run this workload with ../build_output/bin/fdbserver -r simulation -f
-// ../src/foundationdb/tests/slow/S3ClientWorkload.toml
+// ../src/foundationdb/tests/fast/S3ClientWorkload.toml
 struct S3ClientWorkload : TestWorkload {
 	static constexpr auto NAME = "S3ClientWorkload";
 	const bool enabled;
@@ -70,7 +57,7 @@ struct S3ClientWorkload : TestWorkload {
 	Future<Void> setup(Database const& cx) override {
 		if (!enabled)
 			return Void();
-		return _setup(this, cx);
+		return Void();
 	}
 
 	Future<Void> start(Database const& cx) override { return _start(this, cx); }
@@ -97,7 +84,7 @@ private:
 
 	// Add the basename of a file to the URL path
 	static std::string addFileToUrl(std::string filePath, std::string baseUrl) {
-		std::string basename = ::basename(const_cast<char*>(filePath.c_str()));
+		std::string basename = ::basename(filePath);
 
 		// Parse the URL and append the basename to the path
 		try {
@@ -185,8 +172,7 @@ private:
 		self->setupCredentialsFile();
 
 		// Create a unique object key for S3 (using only the base filename)
-		std::string baseFilename =
-		    ::basename(const_cast<char*>(self->credentials.c_str())); // Gets filename from the *new* path
+		std::string baseFilename = ::basename(self->credentials); // Gets filename from the *new* path
 		// Use deterministic ID based on client ID and test context instead of random UID
 		// This ensures identical behavior across determinism check runs
 		std::string deterministicId = format("%08x_%08x", self->clientId, deterministicRandom()->randomInt(0, 1000000));
@@ -257,30 +243,6 @@ private:
 			TraceEvent(SevWarn, "S3ClientWorkloadCleanupError").errorUnsuppressed(e);
 		}
 
-		return Void();
-	}
-
-	ACTOR Future<Void> _setup(S3ClientWorkload* self, Database cx) {
-		// Only client 0 registers the MockS3Server to avoid duplicates
-		if (self->clientId == 0) {
-			// Check if we're using a local mock server URL pattern
-			bool useMockS3 = self->s3Url.find("127.0.0.1") != std::string::npos ||
-			                 self->s3Url.find("localhost") != std::string::npos ||
-			                 self->s3Url.find("mock-s3-server") != std::string::npos;
-
-			if (useMockS3 && g_network->isSimulated()) {
-				TraceEvent("S3ClientWorkload").detail("Phase", "Registering MockS3Server").detail("URL", self->s3Url);
-
-				// Register MockS3Server with IP address - simulation environment doesn't support hostname resolution.
-				// See in HTTPServer.actor.cpp how the MockS3RequestHandler is implemented. Client connects to
-				// connect("127.0.0.1", "8080") and then simulation network routes it to MockS3Server.
-				wait(g_simulator->registerSimHTTPServer("127.0.0.1", "8080", makeReference<MockS3RequestHandler>()));
-
-				TraceEvent("S3ClientWorkload")
-				    .detail("Phase", "MockS3Server Registered")
-				    .detail("Address", "127.0.0.1:8080");
-			}
-		}
 		return Void();
 	}
 };

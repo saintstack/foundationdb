@@ -766,7 +766,9 @@ ACTOR Future<ISimulator::KillType> simulatedFDBDRebooter(Reference<IClusterConne
                                                          ConfigDBType configDBType,
                                                          bool isDr) {
 	state ISimulator::ProcessInfo* simProcess = g_simulator->getCurrentProcess();
-	state UID randomId = nondeterministicRandom()->randomUniqueID();
+	// DETERMINISM FIX: Use deterministicRandom for consistent process startup across simulation runs
+	// Original: state UID randomId = nondeterministicRandom()->randomUniqueID();
+	state UID randomId = deterministicRandom()->randomUniqueID();
 	state int cycles = 0;
 	state IPAllowList allowList;
 
@@ -1042,7 +1044,9 @@ ACTOR Future<Void> simulatedMachine(ClusterConnectionString connStr,
 	state int bootCount = 0;
 	state std::vector<std::string> myFolders;
 	state std::vector<std::string> coordFolders;
-	state UID randomId = nondeterministicRandom()->randomUniqueID();
+	// DETERMINISM FIX: Use deterministicRandom for consistent process startup across simulation runs
+	// Original: state UID randomId = nondeterministicRandom()->randomUniqueID();
+	state UID randomId = deterministicRandom()->randomUniqueID();
 	state int listenPerProcess = (sslEnabled && !sslOnly) ? 2 : 1;
 
 	try {
@@ -3065,6 +3069,7 @@ ACTOR void simulationSetupAndRun(std::string dataFolder,
 		    .detail("UsingTenant", defaultTenant)
 		    .detail("TenantMode", tenantMode.get().toString())
 		    .detail("TotalTenants", tenantsToCreate.size());
+		// REVERT: Go back to original random directory creation - the directory naming wasn't the real issue
 		std::string clusterFileDir = joinPath(dataFolder, deterministicRandom()->randomUniqueID().toString());
 		platform::createDirectory(clusterFileDir);
 		writeFile(joinPath(clusterFileDir, "fdb.cluster"), connectionString.get().toString());
