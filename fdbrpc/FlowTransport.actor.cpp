@@ -44,6 +44,7 @@
 #include "fdbrpc/IPAllowList.h"
 #include "fdbrpc/TokenCache.h"
 #include "fdbrpc/simulator.h"
+#include "fdbrpc/SimulatorProcessInfo.h"
 #include "flow/ActorCollection.h"
 #include "flow/Error.h"
 #include "flow/flow.h"
@@ -1164,7 +1165,11 @@ ACTOR static void deliver(TransportData* self,
 	}
 
 	auto msgReceiver = self->endpoints.get(destination.token);
-	if (msgReceiver && (isTrustedPeer || msgReceiver->isPublic())) {
+	if (!msgReceiver) {
+		return; // No receiver found for this token
+	}
+
+	if (isTrustedPeer || msgReceiver->isPublic()) {
 		if (!checkCompatible(msgReceiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
 			return;
 		}
@@ -1177,16 +1182,6 @@ ACTOR static void deliver(TransportData* self,
 			StringRef data = reader.arenaReadAll();
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
-
-			// Defensive check: verify receiver is still valid before using it
-			// Re-fetch the receiver to ensure it hasn't been invalidated
-			auto currentReceiver = self->endpoints.get(destination.token);
-			if (currentReceiver != msgReceiver) {
-				TraceEvent(SevWarn, "ReceiverInvalidated")
-				    .detail("Token", destination.token.toString())
-				    .detail("Peer", destination.getPrimaryAddress());
-				return;
-			}
 
 			msgReceiver->receive(objReader);
 			g_currentDeliveryPeerAddress = NetworkAddressList();

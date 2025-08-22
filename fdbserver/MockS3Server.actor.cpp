@@ -996,10 +996,6 @@ ACTOR Future<Void> startMockS3Server(NetworkAddress listenAddress) {
 
 // Unit Tests for MockS3Server
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/ValidBucketParameter") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test?bucket=testbucket&region=us-east-1";
 	std::string bucket, object;
@@ -1016,10 +1012,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/ValidBucketParameter") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/MissingBucketParameter") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test?region=us-east-1";
 	std::string bucket, object;
@@ -1036,10 +1028,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/MissingBucketParameter") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/EmptyQueryString") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test";
 	std::string bucket, object;
@@ -1056,10 +1044,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/EmptyQueryString") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/BucketParameterOverride") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/testbucket/testobject?bucket=testbucket&region=us-east-1";
 	std::string bucket, object;
@@ -1076,10 +1060,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/BucketParameterOverride") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/ComplexPath") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/testbucket/folder/subfolder/file.txt?bucket=testbucket&region=us-east-1";
 	std::string bucket, object;
@@ -1096,10 +1076,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/ComplexPath") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/URLEncodedParameters") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test?bucket=test%20bucket&region=us-east-1&param=value%3Dtest";
 	std::string bucket, object;
@@ -1116,10 +1092,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/URLEncodedParameters") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/EmptyPath") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/?bucket=testbucket&region=us-east-1";
 	std::string bucket, object;
@@ -1136,10 +1108,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/EmptyPath") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/OnlyBucketInPath") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/testbucket?bucket=testbucket&region=us-east-1";
 	std::string bucket, object;
@@ -1156,10 +1124,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/OnlyBucketInPath") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/MultipleParameters") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test?bucket=testbucket&region=us-east-1&version=1&encoding=utf8";
 	std::string bucket, object;
@@ -1178,10 +1142,6 @@ TEST_CASE("/fdbserver/MockS3Server/parseS3Request/MultipleParameters") {
 }
 
 TEST_CASE("/fdbserver/MockS3Server/parseS3Request/ParametersWithoutValues") {
-	if (g_network->isSimulated()) {
-		return Void(); // Skip unit tests during simulation
-	}
-
 	MockS3ServerImpl server;
 	std::string resource = "/test?bucket=testbucket&flag&region=us-east-1";
 	std::string bucket, object;

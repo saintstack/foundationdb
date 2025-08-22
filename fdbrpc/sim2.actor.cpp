@@ -548,27 +548,38 @@ private:
 		}
 	}
 	ACTOR static Future<Void> whenReadable(Sim2Conn* self) {
-		try {
-			loop {
+		loop {
+			wait(g_simulator->onProcess(self->process));
+			try {
 				if (self->readBytes.get() != self->receivedBytes.get()) {
-					ASSERT(g_simulator->getCurrentProcess() == self->process);
+					if (g_simulator->getCurrentProcess() != self->process) {
+						return Void();
+					}
 					return Void();
 				}
 				wait(self->receivedBytes.onChange());
 				self->rollRandomClose();
+			} catch (Error& e) {
+				if (g_simulator->getCurrentProcess() != self->process) {
+					return Void();
+				}
+				throw;
 			}
-		} catch (Error& e) {
-			ASSERT(g_simulator->getCurrentProcess() == self->process);
-			throw;
 		}
 	}
 	ACTOR static Future<Void> whenWritable(Sim2Conn* self) {
-		try {
-			loop {
+		loop {
+			if (!self->peer)
+				return Void();
+			wait(g_simulator->onProcess(self->process));
+			try {
+				// Check if peer is still valid after the wait
 				if (!self->peer)
 					return Void();
 				if (self->peer->availableSendBufferForPeer() > 0) {
-					ASSERT(g_simulator->getCurrentProcess() == self->process);
+					if (g_simulator->getCurrentProcess() != self->process) {
+						return Void();
+					}
 					return Void();
 				}
 				try {
@@ -576,16 +587,20 @@ private:
 					// Check if peer is still valid after the wait
 					if (!self->peer)
 						return Void();
-					ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
+					wait(g_simulator->onProcess(self->peerProcess));
+					if (g_simulator->getCurrentProcess() != self->peerProcess) {
+						return Void();
+					}
 				} catch (Error& e) {
 					if (e.code() != error_code_broken_promise)
 						throw;
 				}
-				wait(g_simulator->onProcess(self->process));
+			} catch (Error& e) {
+				if (g_simulator->getCurrentProcess() != self->process) {
+					return Void();
+				}
+				throw;
 			}
-		} catch (Error& e) {
-			ASSERT(g_simulator->getCurrentProcess() == self->process);
-			throw;
 		}
 	}
 
@@ -2637,9 +2652,11 @@ public:
 		return Void();
 	}
 
-	Future<Void> unregisterSimHTTPServer(std::string hostname, std::string service) override {
+	Future<Void> unregisterSimHTTPServer(std::string hostname, std::string service) {
 		return unregisterSimHTTPServerActor(this, hostname, service);
 	}
+
+	// TODO: Unregister will be added in a follow-up change
 
 	Sim2(bool printSimTime)
 	  : time(0.0), timerTime(0.0), currentTaskID(TaskPriority::Zero), yielded(false), yield_limit(0),

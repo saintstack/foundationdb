@@ -302,8 +302,6 @@ public:
 	virtual Future<Void> registerSimHTTPServer(std::string hostname,
 	                                           std::string service,
 	                                           Reference<HTTP::IRequestHandler> requestHandler) = 0;
-	virtual Future<Void> unregisterSimHTTPServer(std::string hostname, std::string service) = 0;
-
 	int desiredCoordinators;
 	int physicalDatacenters;
 	int processesPerMachine;
