@@ -630,12 +630,17 @@ public:
 		// Get query parameters for listing
 		std::string prefix = queryParams.count("prefix") ? queryParams.at("prefix") : "";
 		std::string delimiter = queryParams.count("delimiter") ? queryParams.at("delimiter") : "";
+		std::string marker = queryParams.count("marker") ? queryParams.at("marker") : "";
+		std::string continuationToken =
+		    queryParams.count("continuation-token") ? queryParams.at("continuation-token") : "";
 		int maxKeys = queryParams.count("max-keys") ? std::stoi(queryParams.at("max-keys")) : 1000;
 
 		TraceEvent("MockS3ListObjectsDebug")
 		    .detail("Bucket", bucket)
 		    .detail("Prefix", prefix)
 		    .detail("Delimiter", delimiter)
+		    .detail("Marker", marker)
+		    .detail("ContinuationToken", continuationToken)
 		    .detail("MaxKeys", maxKeys);
 
 		// Find bucket
@@ -645,14 +650,8 @@ public:
 			return Void();
 		}
 
-		// Build list of matching objects
-		std::string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult>\n";
-		xml += "<Name>" + bucket + "</Name>\n";
-		xml += "<Prefix>" + prefix + "</Prefix>\n";
-		xml += "<MaxKeys>" + std::to_string(maxKeys) + "</MaxKeys>\n";
-		xml += "<IsTruncated>false</IsTruncated>\n";
-
-		int count = 0;
+		// Collect all matching objects first
+		std::vector<std::pair<std::string, const ObjectData*>> matchingObjects;
 		for (const auto& objectPair : bucketIter->second) {
 			const std::string& objectName = objectPair.first;
 			const ObjectData& objectData = objectPair.second;
@@ -662,20 +661,67 @@ public:
 				continue;
 			}
 
-			// Apply max-keys limit
-			if (count >= maxKeys) {
-				break;
+			matchingObjects.push_back({ objectName, &objectData });
+		}
+
+		// Sort objects by name for consistent pagination
+		std::sort(matchingObjects.begin(), matchingObjects.end());
+
+		// Find starting point for pagination
+		size_t startIndex = 0;
+		if (!marker.empty()) {
+			for (size_t i = 0; i < matchingObjects.size(); i++) {
+				if (matchingObjects[i].first > marker) {
+					startIndex = i;
+					break;
+				}
 			}
+		} else if (!continuationToken.empty()) {
+			// Simple continuation token implementation (just use the last object name)
+			for (size_t i = 0; i < matchingObjects.size(); i++) {
+				if (matchingObjects[i].first > continuationToken) {
+					startIndex = i;
+					break;
+				}
+			}
+		}
+
+		// Build list of objects for this page
+		std::string xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ListBucketResult>\n";
+		xml += "<Name>" + bucket + "</Name>\n";
+		xml += "<Prefix>" + prefix + "</Prefix>\n";
+		xml += "<MaxKeys>" + std::to_string(maxKeys) + "</MaxKeys>\n";
+
+		if (!marker.empty()) {
+			xml += "<Marker>" + marker + "</Marker>\n";
+		}
+
+		int count = 0;
+		std::string lastKey;
+		size_t totalMatching = matchingObjects.size();
+
+		for (size_t i = startIndex; i < matchingObjects.size() && count < maxKeys; i++) {
+			const std::string& objectName = matchingObjects[i].first;
+			const ObjectData* objectData = matchingObjects[i].second;
 
 			xml += "<Contents>\n";
 			xml += "<Key>" + objectName + "</Key>\n";
-			xml += "<LastModified>" + std::to_string((int64_t)objectData.lastModified) + "</LastModified>\n";
-			xml += "<ETag>" + objectData.etag + "</ETag>\n";
-			xml += "<Size>" + std::to_string(objectData.content.size()) + "</Size>\n";
+			xml += "<LastModified>" + std::to_string((int64_t)objectData->lastModified) + "</LastModified>\n";
+			xml += "<ETag>" + objectData->etag + "</ETag>\n";
+			xml += "<Size>" + std::to_string(objectData->content.size()) + "</Size>\n";
 			xml += "<StorageClass>STANDARD</StorageClass>\n";
 			xml += "</Contents>\n";
 
+			lastKey = objectName;
 			count++;
+		}
+
+		// Determine if there are more results
+		bool isTruncated = (startIndex + count) < totalMatching;
+		xml += "<IsTruncated>" + std::string(isTruncated ? "true" : "false") + "</IsTruncated>\n";
+
+		if (isTruncated && !lastKey.empty()) {
+			xml += "<NextMarker>" + lastKey + "</NextMarker>\n";
 		}
 
 		xml += "</ListBucketResult>";
@@ -685,7 +731,11 @@ public:
 		TraceEvent("MockS3ListObjectsCompleted")
 		    .detail("Bucket", bucket)
 		    .detail("Prefix", prefix)
-		    .detail("ObjectCount", count);
+		    .detail("ObjectCount", count)
+		    .detail("StartIndex", startIndex)
+		    .detail("TotalMatching", totalMatching)
+		    .detail("IsTruncated", isTruncated)
+		    .detail("NextMarker", isTruncated ? lastKey : "");
 
 		return Void();
 	}
@@ -955,4 +1005,24 @@ ACTOR Future<Void> startMockS3Server(NetworkAddress listenAddress) {
 	}
 
 	return Void();
+}
+
+// Real HTTP Server Implementation for ctests
+ACTOR Future<Void> startMockS3ServerReal_impl(NetworkAddress listenAddress) {
+	TraceEvent("MockS3ServerRealStarting").detail("ListenAddress", listenAddress.toString());
+
+	state Reference<HTTP::SimServerContext> server = makeReference<HTTP::SimServerContext>();
+	server->registerNewServer(listenAddress, makeReference<MockS3RequestHandler>());
+
+	TraceEvent("MockS3ServerRealStarted")
+	    .detail("ListenAddress", listenAddress.toString())
+	    .detail("ServerPtr", format("%p", server.getPtr()));
+
+	// Keep the server running indefinitely
+	wait(Never());
+	return Void();
+}
+
+Future<Void> startMockS3ServerReal(const NetworkAddress& listenAddress) {
+	return startMockS3ServerReal_impl(listenAddress);
 }

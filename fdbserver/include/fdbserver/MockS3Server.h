@@ -43,5 +43,8 @@ public:
 	void delref() override { ReferenceCounted<MockS3RequestHandler>::delref(); }
 };
 
-// Start a mock S3 server listening on the specified address
+// Start a mock S3 server listening on the specified address (simulation mode)
 Future<Void> startMockS3Server(const NetworkAddress& listenAddress);
+
+// Start a mock S3 server in real HTTP mode for ctests
+Future<Void> startMockS3ServerReal(const NetworkAddress& listenAddress);
