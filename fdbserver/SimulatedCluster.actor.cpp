@@ -486,7 +486,7 @@ public:
 	int extraMachineCountDC = 0;
 	int extraStorageMachineCountPerDC = 0;
 
-	Optional<bool> generateFearless, buggify;
+	Optional<bool> generateFearless, buggify, faultInjection;
 	Optional<std::string> config;
 	Optional<std::string> remoteConfig;
 	bool blobGranulesEnabled = false;
@@ -568,6 +568,7 @@ public:
 		    .add("config", &config)
 		    .add("remoteConfig", &remoteConfig)
 		    .add("buggify", &buggify)
+		    .add("faultInjection", &faultInjection)
 		    .add("StderrSeverity", &stderrSeverity)
 		    .add("machineCount", &machineCount)
 		    .add("asanMachineCount", &asanMachineCount)
@@ -907,7 +908,8 @@ ACTOR Future<ISimulator::KillType> simulatedFDBDRebooter(Reference<IClusterConne
 				ASSERT(destructed ||
 				       g_simulator->getCurrentProcess() == process); // simulatedFDBD catch called on different process
 				TraceEvent(e.code() == error_code_actor_cancelled || e.code() == error_code_file_not_found ||
-				                   e.code() == error_code_incompatible_software_version || destructed
+				                   e.code() == error_code_incompatible_software_version ||
+				                   e.code() == error_code_broken_promise || destructed
 				               ? SevInfo
 				               : SevError,
 				           "SimulatedFDBDTerminated")
