@@ -499,13 +499,13 @@ private:
 		if (!g_simulator || g_simulator->httpHandlers.empty()) {
 			return false;
 		}
-		
+
 		// Look for MockS3Server specifically (registered on 127.0.0.1:8080)
 		auto it = g_simulator->httpHandlers.find("127.0.0.1:8080");
 		if (it == g_simulator->httpHandlers.end()) {
 			return false;
 		}
-		
+
 		// Additional safety: only enable for backup/restore related tests
 		// This prevents false positives from lingering HTTP handlers
 		return g_simulator->httpServerProcesses.size() > 0;
@@ -1892,6 +1892,10 @@ public:
 		    .detail("Address", p->address)
 		    .detail("MachineId", p->locality.machineId());
 		currentlyRebootingProcesses.insert(std::pair<NetworkAddress, ProcessInfo*>(p->address, p));
+		
+		// Clean up HTTP server processes to prevent stale pointer access
+		cleanupHTTPServerProcess(p);
+		
 		std::vector<ProcessInfo*>& processes = machines[p->locality.machineId().get()].processes;
 		machines[p->locality.machineId().get()].removeRemotePort(p->address.port);
 		if (p != processes.back()) {
@@ -2576,7 +2580,11 @@ public:
 
 	void removeSimHTTPProcess() override {
 		ProcessInfo* p = getCurrentProcess();
+		cleanupHTTPServerProcess(p);
+	}
 
+	// Helper function to clean up HTTP server processes (used by both removeSimHTTPProcess and destroyProcess)
+	void cleanupHTTPServerProcess(ProcessInfo* p) {
 		bool found = false;
 		for (int i = 0; i < httpServerProcesses.size(); i++) {
 			if (p == httpServerProcesses[i].first) {
@@ -2585,11 +2593,13 @@ public:
 				break;
 			}
 		}
-		ASSERT(found);
-
-		// FIXME: potentially instead delay removing from DNS for a bit so we still briefly try to talk to dead server
-		for (auto& it : httpHandlers) {
-			it.second->removeIp(p->address.ip);
+		
+		if (found) {
+			TraceEvent(SevDebug, "HTTPServerProcessCleaned").detail("Address", p->address);
+			// FIXME: potentially instead delay removing from DNS for a bit so we still briefly try to talk to dead server
+			for (auto& it : httpHandlers) {
+				it.second->removeIp(p->address.ip);
+			}
 		}
 	}
 
