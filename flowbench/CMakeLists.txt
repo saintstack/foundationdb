@@ -14,40 +14,80 @@ elseif(EXISTS /opt/googlebenchmark-f91b6b-g++ AND NOT USE_LIBCXX)
   target_include_directories(flowbench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include" /opt/googlebenchmark-f91b6b-g++/include)
   target_link_directories(flowbench PRIVATE /opt/googlebenchmark-f91b6b-g++/lib64)
 else()
-  ## This seems to be copy-pasted from the the google benchmark documentation.
-  ## It breaks if you attempt to re-use a build of googlebenchmark across FDB
-  ## builds.
+  ## Improved Google Benchmark download and build process with better error handling
+  ## and compatibility for local development environments.
 
-  # include the configurations from benchmark.cmake
-  configure_file(benchmark.cmake googlebenchmark-download/CMakeLists.txt)
-  # executing the configuration step
-  execute_process(
-      COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
-      RESULT_VARIABLE results
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-download
-  )
-  # checking if the configuration step passed
-  if(results)
-      message(FATAL_ERROR "Configuration step for Benchmark has Failed. ${results}")
+  # First, try to find system-installed benchmark
+  find_package(benchmark QUIET)
+  
+  if(benchmark_FOUND)
+    message(STATUS "Using system-installed Google Benchmark")
+    add_flow_target(EXECUTABLE NAME flowbench SRCS ${FLOWBENCH_SRCS})
+    target_include_directories(flowbench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include")
+  else()
+    message(STATUS "System Google Benchmark not found, building from source")
+    
+    # Check if we already have the source downloaded
+    if(NOT EXISTS ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src)
+      # include the configurations from benchmark.cmake
+      configure_file(benchmark.cmake googlebenchmark-download/CMakeLists.txt)
+      
+      # executing the configuration step with better error handling
+      execute_process(
+          COMMAND ${CMAKE_COMMAND} -G "${CMAKE_GENERATOR}" .
+          RESULT_VARIABLE config_result
+          OUTPUT_VARIABLE config_output
+          ERROR_VARIABLE config_error
+          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-download
+      )
+      
+      # checking if the configuration step passed
+      if(config_result)
+          message(WARNING "Google Benchmark configuration failed: ${config_error}")
+          message(STATUS "Skipping flowbench target due to Google Benchmark build failure")
+          return()
+      endif()
+      
+      # executing the build step with better error handling
+      execute_process(
+          COMMAND ${CMAKE_COMMAND} --build . --config Release
+          RESULT_VARIABLE build_result
+          OUTPUT_VARIABLE build_output
+          ERROR_VARIABLE build_error
+          WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-download
+      )
+      
+      # checking if the build step passed
+      if(build_result)
+        message(WARNING "Google Benchmark build failed: ${build_error}")
+        message(STATUS "Skipping flowbench target due to Google Benchmark build failure")
+        return()
+      endif()
+    endif()
+    
+    # Only proceed if the source directory exists
+    if(EXISTS ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src)
+      set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "Disable benchmark testing" FORCE)
+      set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "Disable benchmark gtest tests" FORCE)
+      set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "Disable benchmark install" FORCE)
+      
+      add_subdirectory(
+        ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src
+        ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-build
+        EXCLUDE_FROM_ALL
+      )
+      
+      add_flow_target(EXECUTABLE NAME flowbench SRCS ${FLOWBENCH_SRCS})
+      target_include_directories(flowbench PRIVATE 
+        "${CMAKE_CURRENT_SOURCE_DIR}/include" 
+        "${CMAKE_CURRENT_BINARY_DIR}/include"  
+        "${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src/include"
+      )
+    else()
+      message(STATUS "Google Benchmark source not available, skipping flowbench target")
+      return()
+    endif()
   endif()
-  # executing the build step
-  execute_process(
-      COMMAND ${CMAKE_COMMAND} --build . --config Release
-      RESULT_VARIABLE results
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-download
-  )
-  # checking if the build step passed
-  if(results)
-    message(FATAL_ERROR "Build step for Benchmark has Failed. ${results}")
-  endif()
-  set(BENCHMARK_ENABLE_TESTING OFF)
-  add_subdirectory(
-    ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src
-    ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-build
-    EXCLUDE_FROM_ALL
-  )
-  add_flow_target(EXECUTABLE NAME flowbench SRCS ${FLOWBENCH_SRCS})
-  target_include_directories(flowbench PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}/include"  ${CMAKE_CURRENT_BINARY_DIR}/googlebenchmark-src/include)
 endif()
 if(FLOW_USE_ZSTD)
    target_include_directories(flowbench PRIVATE ${ZSTD_LIB_INCLUDE_DIR})
