@@ -495,8 +495,10 @@ private:
 	}
 
 	static bool isMockS3ServerRunning() {
-		// Check if any HTTP server processes are registered (indicates MockS3Server is active)
-		return g_simulator && !g_simulator->httpServerProcesses.empty();
+		// Conservative approach: Always do process switching to avoid test interaction issues
+		// The performance optimization was causing state contamination between tests
+		// where HTTP server processes persist across test boundaries
+		return false;
 	}
 
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
