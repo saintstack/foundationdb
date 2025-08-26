@@ -1322,7 +1322,7 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	init( BLOB_WORKER_REQUEST_TIMEOUT,                          10.0 ); 
 	if( randomize && BUGGIFY ) {
 		// In simulator, process switching can cause delays, so increase timeout to prevent false failures
-		BLOB_WORKER_REQUEST_TIMEOUT = g_network->isSimulated() ? 30.0 : 1.0;
+		BLOB_WORKER_REQUEST_TIMEOUT = isSimulated ? 30.0 : 1.0;
 	}
 	init( BLOB_WORKERLIST_FETCH_INTERVAL,                        1.0 );
 	init( BLOB_WORKER_BATCH_GRV_INTERVAL,                        0.1 );
