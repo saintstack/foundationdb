@@ -497,6 +497,9 @@ private:
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
 		loop {
 			wait(self->writtenBytes.onChange()); // takes place on peer!
+			if (g_simulator->getCurrentProcess() != self->peerProcess) {
+				wait(g_simulator->onProcess(self->peerProcess));
+			}
 			ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			wait(delay(.002 * deterministicRandom()->random01()));
 			self->sentBytes.set(self->writtenBytes.get()); // or possibly just some sometimes...
