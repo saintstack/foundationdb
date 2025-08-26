@@ -874,6 +874,11 @@ Future<Void> MockS3RequestHandler::handleRequest(Reference<HTTP::IncomingRequest
 }
 
 Reference<HTTP::IRequestHandler> MockS3RequestHandler::clone() {
+	// Prevent cloning during destruction to avoid "Pure virtual function called!" errors
+	if (destructing) {
+		TraceEvent(SevWarn, "MockS3RequestHandlerCloneDuringDestruction");
+		return Reference<HTTP::IRequestHandler>();
+	}
 	return makeReference<MockS3RequestHandler>();
 }
 

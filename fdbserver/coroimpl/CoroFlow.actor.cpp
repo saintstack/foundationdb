@@ -62,8 +62,23 @@ struct Coroutine /*: IThreadlike*/ {
 	static constexpr auto kStackSize = 32 * (1 << 10);
 
 	void start() {
+#ifdef __has_feature
+#if __has_feature(address_sanitizer)
+		// AddressSanitizer-compatible stack allocator
+		// Use a larger stack size and ensure proper alignment to avoid heap-buffer-overflow
+		// The issue is that boost::coroutines2::fixedsize_stack doesn't account for AddressSanitizer's
+		// memory layout requirements, causing reads before the allocated region
+		constexpr auto asanStackSize = kStackSize + 4096; // Add 4KB padding for AddressSanitizer
+		coro.reset(new coro_t::pull_type(boost::coroutines2::fixedsize_stack(asanStackSize),
+		                                 [this](coro_t::push_type& sink) { entry(sink); }));
+#else
 		coro.reset(new coro_t::pull_type(boost::coroutines2::fixedsize_stack(kStackSize),
 		                                 [this](coro_t::push_type& sink) { entry(sink); }));
+#endif
+#else
+		coro.reset(new coro_t::pull_type(boost::coroutines2::fixedsize_stack(kStackSize),
+		                                 [this](coro_t::push_type& sink) { entry(sink); }));
+#endif
 		switcher(this);
 	}
 

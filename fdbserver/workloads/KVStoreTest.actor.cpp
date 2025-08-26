@@ -214,10 +214,13 @@ struct KVStoreTestWorkload : TestWorkload {
 	  : TestWorkload(wcx), reads("Reads"), sets("Sets"), commits("Commits"), setupTook(0) {
 		enabled = !clientId; // only do this on the "first" client
 		testDuration = getOption(options, "testDuration"_sr, 10.0);
-		operationsPerSecond = getOption(options, "operationsPerSecond"_sr, 100e3);
+		// In simulator, reduce operation counts to account for process switching overhead
+		double defaultOpsPerSecond = g_network->isSimulated() ? 10e3 : 100e3;
+		int defaultNodeCount = g_network->isSimulated() ? 10000 : 100000;
+		operationsPerSecond = getOption(options, "operationsPerSecond"_sr, defaultOpsPerSecond);
 		commitFraction = getOption(options, "commitFraction"_sr, .001);
 		setFraction = getOption(options, "setFraction"_sr, .1);
-		nodeCount = getOption(options, "nodeCount"_sr, 100000);
+		nodeCount = getOption(options, "nodeCount"_sr, defaultNodeCount);
 		keyBytes = getOption(options, "keyBytes"_sr, 8);
 		valueBytes = getOption(options, "valueBytes"_sr, 8);
 		doSetup = getOption(options, "setup"_sr, false);

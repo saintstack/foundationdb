@@ -525,8 +525,9 @@ std::string getFakeBaseCipherIdsRequestContent(EncryptCipherDomainIdVec& domIds,
 	if (fault != FaultType::MISSING_VERSION) {
 		if (fault == FaultType::INVALID_VERSION) {
 			addVersionToDoc(doc, SERVER_KNOBS->REST_KMS_MAX_CIPHER_REQUEST_VERSION + 1);
+		} else {
+			addVersionToDoc(doc, SERVER_KNOBS->REST_KMS_MAX_CIPHER_REQUEST_VERSION);
 		}
-		addVersionToDoc(doc, SERVER_KNOBS->REST_KMS_MAX_CIPHER_REQUEST_VERSION);
 	}
 
 	if (fault != FaultType::MISSING_VALIDATION_TOKEN) {

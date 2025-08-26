@@ -23,6 +23,7 @@
 #include "flow/flow.h"
 #include "flow/network.h"
 #include "fdbrpc/HTTP.h"
+#include <atomic>
 
 // Mock S3 Server for deterministic testing of S3 operations
 // Supports:
@@ -35,12 +36,30 @@
 // HTTP request handler for Mock S3 Server
 class MockS3RequestHandler : public HTTP::IRequestHandler, public ReferenceCounted<MockS3RequestHandler> {
 public:
+	MockS3RequestHandler() : destructing(false) {}
+	
+	// Prevent virtual function calls during destruction
+	~MockS3RequestHandler() {
+		destructing = true;
+	}
+
 	Future<Void> handleRequest(Reference<HTTP::IncomingRequest> req,
 	                           Reference<HTTP::OutgoingResponse> response) override;
 	Reference<HTTP::IRequestHandler> clone() override;
 
-	void addref() override { ReferenceCounted<MockS3RequestHandler>::addref(); }
-	void delref() override { ReferenceCounted<MockS3RequestHandler>::delref(); }
+	void addref() override { 
+		if (!destructing) {
+			ReferenceCounted<MockS3RequestHandler>::addref(); 
+		}
+	}
+	void delref() override { 
+		if (!destructing) {
+			ReferenceCounted<MockS3RequestHandler>::delref(); 
+		}
+	}
+
+private:
+	std::atomic<bool> destructing;
 };
 
 // Start a mock S3 server listening on the specified address
