@@ -241,6 +241,14 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 				self->totalLatency += now() - tstart;
 			}
 		} catch (Error& e) {
+			// Handle tenant cleanup gracefully - if tenant is deleted during test cleanup, exit gracefully
+			if (e.code() == error_code_tenant_not_found) {
+				TraceEvent(SevInfo, "CycleClientTenantCleanedUpOuter")
+				    .detail("Reason", "Tenant was cleaned up during test shutdown, exiting client (outer catch)")
+				    .detail("ErrorCode", e.code())
+				    .detail("ErrorDescription", e.what());
+				return Void(); // Exit the client gracefully
+			}
 			TraceEvent(SevError, "CycleClient").error(e);
 			throw;
 		}
