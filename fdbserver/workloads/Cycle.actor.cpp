@@ -221,6 +221,14 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 						// 	.log();
 						break;
 					} catch (Error& e) {
+						// Handle tenant cleanup gracefully - if tenant is deleted during test cleanup, exit gracefully
+						if (e.code() == error_code_tenant_not_found) {
+							TraceEvent(SevInfo, "CycleClientTenantCleanedUp")
+							    .detail("Reason", "Tenant was cleaned up during test shutdown, exiting client")
+							    .detail("ErrorCode", e.code())
+							    .detail("ErrorDescription", e.what());
+							return Void(); // Exit the client gracefully
+						}
 						if (e.code() == error_code_transaction_too_old)
 							++self->tooOldRetries;
 						else if (e.code() == error_code_not_committed)
