@@ -494,13 +494,22 @@ private:
 		peer.clear();
 	}
 
+	static bool isMockS3ServerRunning() {
+		// Check if any HTTP server processes are registered (indicates MockS3Server is active)
+		return g_simulator && !g_simulator->httpServerProcesses.empty();
+	}
+
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
 		loop {
 			wait(self->writtenBytes.onChange()); // takes place on peer!
-			if (g_simulator->getCurrentProcess() != self->peerProcess) {
-				wait(g_simulator->onProcess(self->peerProcess));
+			// Conditional process switching: Only switch when MockS3Server is running
+			// This avoids performance overhead for non-S3 tests while maintaining correctness for S3 tests
+			if (isMockS3ServerRunning()) {
+				if (g_simulator->getCurrentProcess() != self->peerProcess) {
+					wait(g_simulator->onProcess(self->peerProcess));
+				}
+				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			}
-			ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			wait(delay(.002 * deterministicRandom()->random01()));
 			self->sentBytes.set(self->writtenBytes.get()); // or possibly just some sometimes...
 		}
@@ -509,13 +518,20 @@ private:
 	ACTOR static Future<Void> receiver(Sim2Conn* self) {
 		loop {
 			if (self->sentBytes.get() != self->receivedBytes.get()) {
-				if (g_simulator->getCurrentProcess() != self->peerProcess) {
-					wait(g_simulator->onProcess(self->peerProcess));
+				// Conditional process switching: Only switch when MockS3Server is running
+				// This avoids performance overhead for non-S3 tests while maintaining correctness for S3 tests
+				if (isMockS3ServerRunning()) {
+					if (g_simulator->getCurrentProcess() != self->peerProcess) {
+						wait(g_simulator->onProcess(self->peerProcess));
+					}
 				}
 			}
 			while (self->sentBytes.get() == self->receivedBytes.get())
 				wait(self->sentBytes.onChange());
-			ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
+			// Only assert process correctness when MockS3Server is running
+			if (isMockS3ServerRunning()) {
+				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
+			}
 
 			// Simulated network disconnection. Make sure to only throw connection_failed() on the sender process.
 			if (g_clogging.disconnected(self->peerProcess->address.ip, self->process->address.ip)) {
