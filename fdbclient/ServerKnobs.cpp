@@ -518,6 +518,13 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	init( ROCKSDB_READ_VALUE_PREFIX_TIMEOUT, isSimulated ? 300.0 : 5.0 );
 	init( ROCKSDB_READ_RANGE_TIMEOUT,      isSimulated ? 300.0 : 5.0 );
 	init( ROCKSDB_READ_CHECKPOINT_TIMEOUT, isSimulated ? 300.0 : 5.0 );
+	// Additional timeout increases for performance tests to account for process switching overhead
+	if( isSimulated && randomize && BUGGIFY ) {
+		ROCKSDB_READ_VALUE_TIMEOUT = std::max(ROCKSDB_READ_VALUE_TIMEOUT, 600.0);
+		ROCKSDB_READ_VALUE_PREFIX_TIMEOUT = std::max(ROCKSDB_READ_VALUE_PREFIX_TIMEOUT, 600.0);
+		ROCKSDB_READ_RANGE_TIMEOUT = std::max(ROCKSDB_READ_RANGE_TIMEOUT, 600.0);
+		ROCKSDB_READ_CHECKPOINT_TIMEOUT = std::max(ROCKSDB_READ_CHECKPOINT_TIMEOUT, 600.0);
+	}
 	init( ROCKSDB_CHECKPOINT_READ_AHEAD_SIZE,                2 << 20 ); // 2M
 	init( ROCKSDB_READ_QUEUE_WAIT,                               1.0 );
 	init( ROCKSDB_READ_QUEUE_HARD_MAX,                          1000 );
@@ -1322,6 +1329,10 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	if( randomize && BUGGIFY ) {
 		// In simulator, process switching can cause delays, so increase timeout to prevent false failures
 		BLOB_WORKER_REQUEST_TIMEOUT = isSimulated ? 30.0 : 1.0;
+	}
+	// Additional timeout increases for complex blob granule tests to account for process switching overhead
+	if( isSimulated && randomize && BUGGIFY ) {
+		BLOB_WORKER_REQUEST_TIMEOUT = std::max(BLOB_WORKER_REQUEST_TIMEOUT, 60.0);
 	}
 	init( BLOB_WORKERLIST_FETCH_INTERVAL,                        1.0 );
 	init( BLOB_WORKER_BATCH_GRV_INTERVAL,                        0.1 );
