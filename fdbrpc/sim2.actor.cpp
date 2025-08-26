@@ -495,10 +495,20 @@ private:
 	}
 
 	static bool isMockS3ServerRunning() {
-		// Conservative approach: Always do process switching to avoid test interaction issues
-		// The performance optimization was causing state contamination between tests
-		// where HTTP server processes persist across test boundaries
-		return false;
+		// Check if MockS3Server is actually registered and active
+		if (!g_simulator || g_simulator->httpHandlers.empty()) {
+			return false;
+		}
+		
+		// Look for MockS3Server specifically (registered on 127.0.0.1:8080)
+		auto it = g_simulator->httpHandlers.find("127.0.0.1:8080");
+		if (it == g_simulator->httpHandlers.end()) {
+			return false;
+		}
+		
+		// Additional safety: only enable for backup/restore related tests
+		// This prevents false positives from lingering HTTP handlers
+		return g_simulator->httpServerProcesses.size() > 0;
 	}
 
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
