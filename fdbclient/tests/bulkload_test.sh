@@ -12,7 +12,8 @@
 # so you can manually rerun commands or peruse logs and data
 # under SCRATCH_DIR.
 
-# Make sure cleanup on script exit.
+# Install signal traps. Depends on globals being set.
+# Calls the cleanup function.
 trap "exit 1" HUP INT PIPE QUIT TERM
 trap cleanup  EXIT
 

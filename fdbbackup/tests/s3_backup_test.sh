@@ -33,7 +33,10 @@ function cleanup {
   if type shutdown_aws &> /dev/null; then
     shutdown_aws "${TEST_SCRATCH_DIR}"
   fi
+  
+  # Clean up encryption key file
   if [[ -n "${ENCRYPTION_KEY_FILE:-}" ]] && [[ -f "${ENCRYPTION_KEY_FILE}" ]]; then
+    echo "Removing encryption key file: ${ENCRYPTION_KEY_FILE}"
     rm -f "${ENCRYPTION_KEY_FILE}"
   fi
 }

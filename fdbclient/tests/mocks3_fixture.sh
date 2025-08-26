@@ -97,8 +97,8 @@ get_weed_url() {
     get_mocks3_url
 }
 
-# Trap to ensure cleanup on script exit
-trap shutdown_mocks3 EXIT
+# Note: No EXIT trap here - main scripts handle cleanup via their own traps
+# This prevents conflicts with main script trap handlers
 
 # Export functions for use by test scripts
 export -f start_mocks3
