@@ -502,34 +502,12 @@ private:
 			self->sentBytes.set(self->writtenBytes.get()); // or possibly just some sometimes...
 		}
 	}
-	// Check if MockS3Server is registered - only then do we need process switching for mutex operations
-	//
-	// BACKGROUND: MockS3Server was enhanced with thread-safe mutex operations to handle concurrent
-	// S3 requests in simulation. However, the FoundationDB simulator is single-threaded and simulates
-	// multiple processes cooperatively. When network actors access mutex-protected shared resources
-	// (like MockS3Server's buckets map), they must be running on the correct process context.
-	//
-	// PROBLEM: Without proper process switching, network actors could be on the wrong process when
-	// hitting mutex operations, causing assertion failures: ASSERT(g_simulator->getCurrentProcess() ==
-	// self->peerProcess)
-	//
-	// SOLUTION: Conditional process switching - only perform expensive g_simulator->onProcess() calls
-	// when MockS3Server is actually registered. This maintains correctness for S3 tests while
-	// eliminating performance overhead for non-S3 tests.
-	static bool isMockS3ServerRunning() {
-		// Check if any HTTP server processes are registered (indicates MockS3Server is active)
-		return g_simulator && !g_simulator->httpServerProcesses.empty();
-	}
 
 	ACTOR static Future<Void> receiver(Sim2Conn* self) {
 		loop {
 			if (self->sentBytes.get() != self->receivedBytes.get()) {
-				// Conditional process switching: Only switch when MockS3Server is running
-				// This avoids performance overhead for non-S3 tests while maintaining correctness for S3 tests
-				if (isMockS3ServerRunning()) {
-					if (g_simulator->getCurrentProcess() != self->peerProcess) {
-						wait(g_simulator->onProcess(self->peerProcess));
-					}
+				if (g_simulator->getCurrentProcess() != self->peerProcess) {
+					wait(g_simulator->onProcess(self->peerProcess));
 				}
 			}
 			while (self->sentBytes.get() == self->receivedBytes.get())
