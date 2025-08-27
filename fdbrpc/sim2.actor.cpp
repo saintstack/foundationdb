@@ -495,20 +495,9 @@ private:
 	}
 
 	static bool isMockS3ServerRunning() {
-		// Check if MockS3Server is actually registered and active
-		if (!g_simulator || g_simulator->httpHandlers.empty()) {
-			return false;
-		}
-
-		// Look for MockS3Server specifically (registered on 127.0.0.1:8080)
-		auto it = g_simulator->httpHandlers.find("127.0.0.1:8080");
-		if (it == g_simulator->httpHandlers.end()) {
-			return false;
-		}
-
-		// Additional safety: only enable for backup/restore related tests
-		// This prevents false positives from lingering HTTP handlers
-		return g_simulator->httpServerProcesses.size() > 0;
+		// Simple, fast check: only enable process switching when HTTP server processes exist
+		// This avoids expensive map lookups that were causing performance regressions
+		return g_simulator && !g_simulator->httpServerProcesses.empty();
 	}
 
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
@@ -1892,10 +1881,10 @@ public:
 		    .detail("Address", p->address)
 		    .detail("MachineId", p->locality.machineId());
 		currentlyRebootingProcesses.insert(std::pair<NetworkAddress, ProcessInfo*>(p->address, p));
-		
+
 		// Clean up HTTP server processes to prevent stale pointer access
 		cleanupHTTPServerProcess(p);
-		
+
 		std::vector<ProcessInfo*>& processes = machines[p->locality.machineId().get()].processes;
 		machines[p->locality.machineId().get()].removeRemotePort(p->address.port);
 		if (p != processes.back()) {
@@ -2593,10 +2582,11 @@ public:
 				break;
 			}
 		}
-		
+
 		if (found) {
 			TraceEvent(SevDebug, "HTTPServerProcessCleaned").detail("Address", p->address);
-			// FIXME: potentially instead delay removing from DNS for a bit so we still briefly try to talk to dead server
+			// FIXME: potentially instead delay removing from DNS for a bit so we still briefly try to talk to dead
+			// server
 			for (auto& it : httpHandlers) {
 				it.second->removeIp(p->address.ip);
 			}
