@@ -1560,7 +1560,7 @@ void SQLiteDB::open(bool writable) {
 	    .detail("Elapsed", DEBUG_DETERMINISM ? 0 : timer() - startT)
 	    .detail("Filename", filename)
 	    .detail("Writable", writable);
-	ASSERT(vfsAsyncIsOpen(filename));
+	ASSERT(vfsAsyncIsOpen(apath));
 }
 
 void SQLiteDB::createFromScratch() {
