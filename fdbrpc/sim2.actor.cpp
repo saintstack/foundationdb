@@ -495,9 +495,15 @@ private:
 	}
 
 	static bool isMockS3ServerRunning() {
-		// Simple, fast check: only enable process switching when HTTP server processes exist
-		// This avoids expensive map lookups that were causing performance regressions
-		return g_simulator && !g_simulator->httpServerProcesses.empty();
+		// Fast check: only enable process switching when MockS3Server specifically is running
+		// This avoids expensive map lookups while being specific to S3 tests
+		if (!g_simulator || g_simulator->httpHandlers.empty()) {
+			return false;
+		}
+		
+		// Use fast count() instead of find() - still O(log n) but avoids iterator overhead
+		// Only check for the specific MockS3Server address (127.0.0.1:8080)
+		return g_simulator->httpHandlers.count("127.0.0.1:8080") > 0;
 	}
 
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
