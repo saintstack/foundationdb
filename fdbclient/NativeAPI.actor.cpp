@@ -1222,67 +1222,70 @@ ACTOR static Future<Void> handleTssMismatches(DatabaseContext* cx) {
 	state Reference<ReadYourWritesTransaction> tr;
 	state KeyBackedMap<UID, UID> tssMapDB = KeyBackedMap<UID, UID>(tssMappingKeys.begin);
 	state KeyBackedMap<Tuple, std::string> tssMismatchDB = KeyBackedMap<Tuple, std::string>(tssMismatchKeys.begin);
+	// Keep a reference to the stream to prevent it from being destroyed
+	state FutureStream<std::pair<UID, std::vector<DetailedTSSMismatch>>> stream = cx->tssMismatchStream.getFuture();
 	loop {
 		try {
 			// <tssid, list of detailed mismatch data>
-			state std::pair<UID, std::vector<DetailedTSSMismatch>> data = waitNext(cx->tssMismatchStream.getFuture());
-		// return to calling actor, don't do this as part of metrics loop
-		wait(delay(0));
-		// find ss pair id so we can remove it from the mapping
-		state UID tssPairID;
-		bool found = false;
-		for (const auto& it : cx->tssMapping) {
-			if (it.second.id() == data.first) {
-				tssPairID = it.first;
-				found = true;
-				break;
-			}
-		}
-		if (found) {
-			state bool quarantine = CLIENT_KNOBS->QUARANTINE_TSS_ON_MISMATCH;
-			TraceEvent(SevWarnAlways, quarantine ? "TSS_QuarantineMismatch" : "TSS_KillMismatch")
-			    .detail("TSSID", data.first.toString());
-			CODE_PROBE(quarantine, "Quarantining TSS because it got mismatch");
-			CODE_PROBE(!quarantine, "Killing TSS because it got mismatch");
-
-			tr = makeReference<ReadYourWritesTransaction>(Database(Reference<DatabaseContext>::addRef(cx)));
-			state int tries = 0;
-			loop {
-				try {
-					tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
-					tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
-					if (quarantine) {
-						tr->set(tssQuarantineKeyFor(data.first), ""_sr);
-					} else {
-						tr->clear(serverTagKeyFor(data.first));
-					}
-					tssMapDB.erase(tr, tssPairID);
-
-					for (const DetailedTSSMismatch& d : data.second) {
-						// <tssid, time, mismatchid> -> mismatch data
-						tssMismatchDB.set(tr,
-						                  Tuple::makeTuple(data.first.toString(), d.timestamp, d.mismatchId.toString()),
-						                  d.traceString);
-					}
-
-					wait(tr->commit());
-
-					break;
-				} catch (Error& e) {
-					wait(tr->onError(e));
-				}
-				tries++;
-				if (tries > 10) {
-					// Give up, it'll get another mismatch or a human will investigate eventually
-					TraceEvent("TSS_MismatchGaveUp").detail("TSSID", data.first.toString());
+			state std::pair<UID, std::vector<DetailedTSSMismatch>> data = waitNext(stream);
+			// return to calling actor, don't do this as part of metrics loop
+			wait(delay(0));
+			// find ss pair id so we can remove it from the mapping
+			state UID tssPairID;
+			bool found = false;
+			for (const auto& it : cx->tssMapping) {
+				if (it.second.id() == data.first) {
+					tssPairID = it.first;
+					found = true;
 					break;
 				}
 			}
-			// clear out txn so that the extra DatabaseContext ref gets decref'd and we can free cx
-			tr = makeReference<ReadYourWritesTransaction>();
-		} else {
-			CODE_PROBE(true, "Not handling TSS with mismatch because it's already gone");
-		}
+			if (found) {
+				state bool quarantine = CLIENT_KNOBS->QUARANTINE_TSS_ON_MISMATCH;
+				TraceEvent(SevWarnAlways, quarantine ? "TSS_QuarantineMismatch" : "TSS_KillMismatch")
+				    .detail("TSSID", data.first.toString());
+				CODE_PROBE(quarantine, "Quarantining TSS because it got mismatch");
+				CODE_PROBE(!quarantine, "Killing TSS because it got mismatch");
+
+				tr = makeReference<ReadYourWritesTransaction>(Database(Reference<DatabaseContext>::addRef(cx)));
+				state int tries = 0;
+				loop {
+					try {
+						tr->setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
+						tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+						if (quarantine) {
+							tr->set(tssQuarantineKeyFor(data.first), ""_sr);
+						} else {
+							tr->clear(serverTagKeyFor(data.first));
+						}
+						tssMapDB.erase(tr, tssPairID);
+
+						for (const DetailedTSSMismatch& d : data.second) {
+							// <tssid, time, mismatchid> -> mismatch data
+							tssMismatchDB.set(
+							    tr,
+							    Tuple::makeTuple(data.first.toString(), d.timestamp, d.mismatchId.toString()),
+							    d.traceString);
+						}
+
+						wait(tr->commit());
+
+						break;
+					} catch (Error& e) {
+						wait(tr->onError(e));
+					}
+					tries++;
+					if (tries > 10) {
+						// Give up, it'll get another mismatch or a human will investigate eventually
+						TraceEvent("TSS_MismatchGaveUp").detail("TSSID", data.first.toString());
+						break;
+					}
+				}
+				// clear out txn so that the extra DatabaseContext ref gets decref'd and we can free cx
+				tr = makeReference<ReadYourWritesTransaction>();
+			} else {
+				CODE_PROBE(true, "Not handling TSS with mismatch because it's already gone");
+			}
 		} catch (Error& e) {
 			if (e.code() == error_code_actor_cancelled) {
 				// DatabaseContext is being destroyed, exit gracefully
@@ -1946,8 +1949,6 @@ DatabaseContext::~DatabaseContext() {
 	cacheListMonitor.cancel();
 	clientDBInfoMonitor.cancel();
 	monitorTssInfoChange.cancel();
-	// Signal the TSS mismatch handler to stop by sending an error to the stream
-	tssMismatchStream.sendError(actor_cancelled());
 	tssMismatchHandler.cancel();
 	initializeChangeFeedCache = Void();
 	storage = nullptr;
