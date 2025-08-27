@@ -1223,8 +1223,9 @@ ACTOR static Future<Void> handleTssMismatches(DatabaseContext* cx) {
 	state KeyBackedMap<UID, UID> tssMapDB = KeyBackedMap<UID, UID>(tssMappingKeys.begin);
 	state KeyBackedMap<Tuple, std::string> tssMismatchDB = KeyBackedMap<Tuple, std::string>(tssMismatchKeys.begin);
 	loop {
-		// <tssid, list of detailed mismatch data>
-		state std::pair<UID, std::vector<DetailedTSSMismatch>> data = waitNext(cx->tssMismatchStream.getFuture());
+		try {
+			// <tssid, list of detailed mismatch data>
+			state std::pair<UID, std::vector<DetailedTSSMismatch>> data = waitNext(cx->tssMismatchStream.getFuture());
 		// return to calling actor, don't do this as part of metrics loop
 		wait(delay(0));
 		// find ss pair id so we can remove it from the mapping
@@ -1281,6 +1282,13 @@ ACTOR static Future<Void> handleTssMismatches(DatabaseContext* cx) {
 			tr = makeReference<ReadYourWritesTransaction>();
 		} else {
 			CODE_PROBE(true, "Not handling TSS with mismatch because it's already gone");
+		}
+		} catch (Error& e) {
+			if (e.code() == error_code_actor_cancelled) {
+				// DatabaseContext is being destroyed, exit gracefully
+				return Void();
+			}
+			throw;
 		}
 	}
 }
@@ -1938,6 +1946,8 @@ DatabaseContext::~DatabaseContext() {
 	cacheListMonitor.cancel();
 	clientDBInfoMonitor.cancel();
 	monitorTssInfoChange.cancel();
+	// Signal the TSS mismatch handler to stop by sending an error to the stream
+	tssMismatchStream.sendError(actor_cancelled());
 	tssMismatchHandler.cancel();
 	initializeChangeFeedCache = Void();
 	storage = nullptr;
