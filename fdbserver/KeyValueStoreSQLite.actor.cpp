@@ -1424,8 +1424,8 @@ int SQLiteDB::checkAllPageChecksums() {
 	    .detail("ReadErrors", readErrors)
 	    .detail("TotalErrors", totalErrors);
 
-	ASSERT(!vfsAsyncIsOpen(filename));
-	ASSERT(!vfsAsyncIsOpen(filename + "-wal"));
+	ASSERT(!vfsAsyncIsOpen(apath));
+	ASSERT(!vfsAsyncIsOpen(walpath));
 
 	return totalErrors;
 }
