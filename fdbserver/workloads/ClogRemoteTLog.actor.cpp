@@ -52,6 +52,16 @@ struct ClogRemoteTLog : TestWorkload {
 	Optional<NetworkAddress>
 	    cloggedRemoteTLog; // set after clogging is done, we use this state to ensure that it's
 	                       // eventually not present in dbInfo (which implies it was excluded by gray failure)
+	
+	std::vector<std::pair<IPAddress, IPAddress>> cloggedPairs; // track clogged pairs for cleanup
+
+	void unclogAll() {
+		// unclog previously clogged connections
+		for (const auto& pair : cloggedPairs) {
+			g_simulator->unclogPair(pair.first, pair.second);
+		}
+		cloggedPairs.clear();
+	}
 
 	ClogRemoteTLog(const WorkloadContext& wctx) : TestWorkload(wctx) {
 		enabled =
@@ -60,6 +70,11 @@ struct ClogRemoteTLog : TestWorkload {
 		lagMeasurementFrequency = getOption(options, "lagMeasurementFrequency"_sr, 5);
 		clogInitDelay = getOption(options, "clogInitDelay"_sr, 10);
 		lagThreshold = getOption(options, "lagThreshold"_sr, 20);
+	}
+
+	~ClogRemoteTLog() {
+		// Ensure cleanup happens even if test is interrupted
+		unclogAll();
 	}
 
 	Future<Void> setup(const Database& db) override { return Void(); }
@@ -339,6 +354,7 @@ struct ClogRemoteTLog : TestWorkload {
 			}
 			TraceEvent("ClogRemoteTLog").detail("SrcIP", self->cloggedRemoteTLog->ip).detail("DstIP", ip);
 			g_simulator->clogPair(ip, self->cloggedRemoteTLog.get().ip, self->testDuration);
+			self->cloggedPairs.emplace_back(ip, self->cloggedRemoteTLog.get().ip);
 			numClogged++;
 		}
 
@@ -346,7 +362,9 @@ struct ClogRemoteTLog : TestWorkload {
 			self->doCheck = true;
 		}
 
-		wait(Never());
+		// Wait for the test duration, then clean up clogging
+		wait(delay(self->testDuration));
+		self->unclogAll();
 		return Void();
 	}
 
