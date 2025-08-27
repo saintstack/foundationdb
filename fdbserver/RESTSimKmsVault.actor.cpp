@@ -237,18 +237,18 @@ void addBlobMetadaToResDoc(rapidjson::Document& doc, rapidjson::Value& blobDetai
 	blobDetail.AddMember(key, locations, doc.GetAllocator());
 
 	// Add 'refreshAt'
-	key.SetString(REFRESH_AFTER_SEC, doc.GetAllocator());
+	rapidjson::Value refreshKey(REFRESH_AFTER_SEC, doc.GetAllocator());
 	const int64_t refreshAt = getRefreshInterval(now(), FLOW_KNOBS->ENCRYPT_KEY_REFRESH_INTERVAL);
 	rapidjson::Value refreshInterval;
 	refreshInterval.SetInt64(refreshAt);
-	blobDetail.AddMember(key, refreshInterval, doc.GetAllocator());
+	blobDetail.AddMember(refreshKey, refreshInterval, doc.GetAllocator());
 
 	// Add 'expireAt'
-	key.SetString(EXPIRE_AFTER_SEC, doc.GetAllocator());
+	rapidjson::Value expireKey(EXPIRE_AFTER_SEC, doc.GetAllocator());
 	const int64_t expireAt = getExpireInterval(refreshAt, FLOW_KNOBS->ENCRYPT_KEY_REFRESH_INTERVAL);
 	rapidjson::Value expireInterval;
 	expireInterval.SetInt64(expireAt);
-	blobDetail.AddMember(key, expireInterval, doc.GetAllocator());
+	blobDetail.AddMember(expireKey, expireInterval, doc.GetAllocator());
 
 	blobDetails.PushBack(blobDetail, doc.GetAllocator());
 }
