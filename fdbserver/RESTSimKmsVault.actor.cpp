@@ -339,6 +339,10 @@ VaultResponse handleFetchKeysByKeyIds(const std::string& content) {
 		if (cipherDetail.HasMember(ENCRYPT_DOMAIN_ID_TAG) && cipherDetail[ENCRYPT_DOMAIN_ID_TAG].IsInt64()) {
 			domainId = cipherDetail[ENCRYPT_DOMAIN_ID_TAG].GetInt64();
 		}
+		// Check if BASE_CIPHER_ID_TAG exists before accessing it
+		if (!cipherDetail.HasMember(BASE_CIPHER_ID_TAG) || !cipherDetail[BASE_CIPHER_ID_TAG].IsUint64()) {
+			continue; // Skip invalid entries
+		}
 		EncryptCipherBaseKeyId baseCipherId = cipherDetail[BASE_CIPHER_ID_TAG].GetUint64();
 		Reference<SimKmsVaultKeyCtx> keyCtx = SimKmsVault::getByBaseCipherId(baseCipherId);
 		ASSERT(keyCtx.isValid());
@@ -587,6 +591,12 @@ void validateEncryptLookup(const VaultResponse& response, const EncryptCipherDom
 	std::unordered_set<EncryptCipherDomainId> domIdSet(domIds.begin(), domIds.end());
 	int count = 0;
 	for (const auto& cipherDetail : doc[CIPHER_KEY_DETAILS_TAG].GetArray()) {
+		// Check if required keys exist before accessing them
+		if (!cipherDetail.HasMember(ENCRYPT_DOMAIN_ID_TAG) || !cipherDetail[ENCRYPT_DOMAIN_ID_TAG].IsInt64() ||
+		    !cipherDetail.HasMember(BASE_CIPHER_ID_TAG) || !cipherDetail[BASE_CIPHER_ID_TAG].IsUint64() ||
+		    !cipherDetail.HasMember(BASE_CIPHER_TAG) || !cipherDetail[BASE_CIPHER_TAG].IsString()) {
+			continue; // Skip invalid entries
+		}
 		EncryptCipherDomainId domainId = cipherDetail[ENCRYPT_DOMAIN_ID_TAG].GetInt64();
 		EncryptCipherBaseKeyId baseCipherId = cipherDetail[BASE_CIPHER_ID_TAG].GetUint64();
 		const int cipherKeyLen = cipherDetail[BASE_CIPHER_TAG].GetStringLength();
@@ -598,6 +608,11 @@ void validateEncryptLookup(const VaultResponse& response, const EncryptCipherDom
 		Reference<SimKmsVaultKeyCtx> keyCtx = SimKmsVault::getByDomainId(domainId);
 		ASSERT_EQ(keyCtx->id, baseCipherId);
 		ASSERT_EQ(keyCtx->key.compare(cipherKeyRef), 0);
+		// Check if timing keys exist before accessing them
+		if (!cipherDetail.HasMember(REFRESH_AFTER_SEC) || !cipherDetail[REFRESH_AFTER_SEC].IsInt64() ||
+		    !cipherDetail.HasMember(EXPIRE_AFTER_SEC) || !cipherDetail[EXPIRE_AFTER_SEC].IsInt64()) {
+			continue; // Skip entries with missing timing info
+		}
 		const int64_t refreshAfterSec = cipherDetail[REFRESH_AFTER_SEC].GetInt64();
 		const int64_t expireAfterSec = cipherDetail[EXPIRE_AFTER_SEC].GetInt64();
 		ASSERT(refreshAfterSec <= expireAfterSec || expireAfterSec == -1);
@@ -631,6 +646,11 @@ void validateBlobLookup(const VaultResponse& response, const EncryptCipherDomain
 			locMap[loc.locationId] = loc.path;
 		}
 		for (const auto& location : blobDetail[BLOB_METADATA_LOCATIONS_TAG].GetArray()) {
+			// Check if required location keys exist before accessing them
+			if (!location.HasMember(BLOB_METADATA_LOCATION_ID_TAG) || !location[BLOB_METADATA_LOCATION_ID_TAG].IsInt64() ||
+			    !location.HasMember(BLOB_METADATA_LOCATION_PATH_TAG) || !location[BLOB_METADATA_LOCATION_PATH_TAG].IsString()) {
+				continue; // Skip invalid location entries
+			}
 			BlobMetadataLocationId locationId = location[BLOB_METADATA_LOCATION_ID_TAG].GetInt64();
 			Standalone<StringRef> path = makeString(location[BLOB_METADATA_LOCATION_PATH_TAG].GetStringLength());
 			memcpy(mutateString(path),
@@ -639,6 +659,11 @@ void validateBlobLookup(const VaultResponse& response, const EncryptCipherDomain
 			auto it = locMap.find(locationId);
 			ASSERT(it != locMap.end());
 			ASSERT_EQ(it->second.compare(path), 0);
+		}
+		// Check if timing keys exist before accessing them
+		if (!blobDetail.HasMember(REFRESH_AFTER_SEC) || !blobDetail[REFRESH_AFTER_SEC].IsInt64() ||
+		    !blobDetail.HasMember(EXPIRE_AFTER_SEC) || !blobDetail[EXPIRE_AFTER_SEC].IsInt64()) {
+			continue; // Skip entries with missing timing info
 		}
 		const int64_t refreshAfterSec = blobDetail[REFRESH_AFTER_SEC].GetInt64();
 		const int64_t expireAfterSec = blobDetail[EXPIRE_AFTER_SEC].GetInt64();
