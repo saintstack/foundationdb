@@ -236,6 +236,20 @@ void addBlobMetadaToResDoc(rapidjson::Document& doc, rapidjson::Value& blobDetai
 	key.SetString(BLOB_METADATA_LOCATIONS_TAG, doc.GetAllocator());
 	blobDetail.AddMember(key, locations, doc.GetAllocator());
 
+	// Add 'refreshAt'
+	key.SetString(REFRESH_AFTER_SEC, doc.GetAllocator());
+	const int64_t refreshAt = getRefreshInterval(now(), FLOW_KNOBS->ENCRYPT_KEY_REFRESH_INTERVAL);
+	rapidjson::Value refreshInterval;
+	refreshInterval.SetInt64(refreshAt);
+	blobDetail.AddMember(key, refreshInterval, doc.GetAllocator());
+
+	// Add 'expireAt'
+	key.SetString(EXPIRE_AFTER_SEC, doc.GetAllocator());
+	const int64_t expireAt = getExpireInterval(refreshAt, FLOW_KNOBS->ENCRYPT_KEY_REFRESH_INTERVAL);
+	rapidjson::Value expireInterval;
+	expireInterval.SetInt64(expireAt);
+	blobDetail.AddMember(key, expireInterval, doc.GetAllocator());
+
 	blobDetails.PushBack(blobDetail, doc.GetAllocator());
 }
 
@@ -647,8 +661,10 @@ void validateBlobLookup(const VaultResponse& response, const EncryptCipherDomain
 		}
 		for (const auto& location : blobDetail[BLOB_METADATA_LOCATIONS_TAG].GetArray()) {
 			// Check if required location keys exist before accessing them
-			if (!location.HasMember(BLOB_METADATA_LOCATION_ID_TAG) || !location[BLOB_METADATA_LOCATION_ID_TAG].IsInt64() ||
-			    !location.HasMember(BLOB_METADATA_LOCATION_PATH_TAG) || !location[BLOB_METADATA_LOCATION_PATH_TAG].IsString()) {
+			if (!location.HasMember(BLOB_METADATA_LOCATION_ID_TAG) ||
+			    !location[BLOB_METADATA_LOCATION_ID_TAG].IsInt64() ||
+			    !location.HasMember(BLOB_METADATA_LOCATION_PATH_TAG) ||
+			    !location[BLOB_METADATA_LOCATION_PATH_TAG].IsString()) {
 				continue; // Skip invalid location entries
 			}
 			BlobMetadataLocationId locationId = location[BLOB_METADATA_LOCATION_ID_TAG].GetInt64();
