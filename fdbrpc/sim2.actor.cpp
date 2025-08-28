@@ -494,27 +494,14 @@ private:
 		peer.clear();
 	}
 
-	static bool isMockS3ServerRunning() {
-		// Fast check: only enable process switching when MockS3Server specifically is running
-		// This avoids expensive map lookups while being specific to S3 tests
-		if (!g_simulator || g_simulator->httpHandlers.empty()) {
-			return false;
-		}
-		
-		// Use fast count() instead of find() - still O(log n) but avoids iterator overhead
-		// Only check for the specific MockS3Server address (127.0.0.1:8080)
-		return g_simulator->httpHandlers.count("127.0.0.1:8080") > 0;
-	}
+
 
 	ACTOR static Future<Void> sender(Sim2Conn* self) {
 		loop {
 			wait(self->writtenBytes.onChange()); // takes place on peer!
-			// Conditional process switching: Only switch when MockS3Server is running
-			// This avoids performance overhead for non-S3 tests while maintaining correctness for S3 tests
-			if (isMockS3ServerRunning()) {
-				if (g_simulator->getCurrentProcess() != self->peerProcess) {
-					wait(g_simulator->onProcess(self->peerProcess));
-				}
+			// Skip process assertion for HTTP server connections to avoid cross-process issues
+			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
+			if (g_simulator->httpServerIps.count(self->peerProcess->address.ip) == 0) {
 				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			}
 			wait(delay(.002 * deterministicRandom()->random01()));
@@ -524,19 +511,13 @@ private:
 
 	ACTOR static Future<Void> receiver(Sim2Conn* self) {
 		loop {
-			if (self->sentBytes.get() != self->receivedBytes.get()) {
-				// Conditional process switching: Only switch when MockS3Server is running
-				// This avoids performance overhead for non-S3 tests while maintaining correctness for S3 tests
-				if (isMockS3ServerRunning()) {
-					if (g_simulator->getCurrentProcess() != self->peerProcess) {
-						wait(g_simulator->onProcess(self->peerProcess));
-					}
-				}
-			}
+			if (self->sentBytes.get() != self->receivedBytes.get())
+				wait(g_simulator->onProcess(self->peerProcess));
 			while (self->sentBytes.get() == self->receivedBytes.get())
 				wait(self->sentBytes.onChange());
-			// Only assert process correctness when MockS3Server is running
-			if (isMockS3ServerRunning()) {
+			// Skip process assertion for HTTP server connections to avoid cross-process issues
+			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
+			if (g_simulator->httpServerIps.count(self->peerProcess->address.ip) == 0) {
 				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			}
 
@@ -2611,6 +2592,8 @@ public:
 		state Reference<HTTP::SimRegisteredHandlerContext> handlerContext =
 		    makeReference<HTTP::SimRegisteredHandlerContext>(hostname, service, self->nextHTTPPort++, requestHandler);
 		self->httpHandlers.insert({ id, handlerContext });
+
+
 
 		// start process on all running HTTP servers
 		state ProcessInfo* callingProcess = self->getCurrentProcess();
