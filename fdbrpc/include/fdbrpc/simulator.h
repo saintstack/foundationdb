@@ -418,6 +418,7 @@ public:
 	std::set<IPAddress> httpServerIps;
 	int nextHTTPPort = 5000;
 	bool httpProtected = false;
+	bool httpServerProcessSwitchingEnabled = false;
 
 	flowGlobalType global(int id) const final;
 	void setGlobal(size_t id, flowGlobalType v) final;
