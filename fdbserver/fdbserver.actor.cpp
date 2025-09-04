@@ -343,6 +343,8 @@ UID getSharedMemoryMachineId() {
 	// On windows, this means that we have to create an elaborate workaround for DACLs
 	WorldReadablePermissions p;
 	std::string sharedMemoryIdentifier = "fdbserver_shared_memory_id";
+	// Make the identifier unique to avoid conflicts between test runs
+	sharedMemoryIdentifier += "_" + std::to_string(getpid()) + "_" + std::to_string(time(nullptr));
 	loop {
 		try {
 			// "0" is the default netPrefix "addr"
