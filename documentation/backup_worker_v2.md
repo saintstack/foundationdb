@@ -1,5 +1,7 @@
 # FoundationDB Backup Worker v2 Documentation
 
+> **Note**: For the original design and architecture details of the partitioned log backup system, see [`design/backup_v2_partitioned_logs.md`](../design/backup_v2_partitioned_logs.md). This document focuses on the current implementation details and operational aspects.
+
 ## Overview
 
 The Backup Worker is a key component of FoundationDB's backup system v2, introduced to improve backup performance and scalability. Unlike the traditional backup approach where a single backup agent reads from the database, the backup worker system distributes the backup workload across multiple worker processes that read mutations directly from the Transaction Logs (TLogs).
@@ -503,22 +505,22 @@ If backup workers are slow to read mutations from TLogs or stop popping entirely
    - **Unbounded Growth**: Disk queue can grow without limit (until disk space exhausted)
    - **Performance Impact**: Disk I/O becomes bottleneck, affecting write throughput
 
-3. **TLog Cannot Drop Mutations - There Is a Hard Limit**:
-   - **Cannot accumulate forever**: TLogs have a maximum version lag threshold
-   - **Version Difference Limit**: MAX_VERSION_DIFFERENCE = 20 * VERSIONS_PER_SECOND (20 million versions)
-   - **When limit reached**: TLog triggers `tlog_stopped` error
-   - **Cluster Recovery**: Forces immediate cluster recovery to resolve the issue
+3. **TLog Accumulation for Extended Periods**:
+   - **Can accumulate for hours/days**: TLogs can retain data on disk for 24+ hours when backup workers are slow
+   - **Practical limit is disk space**: TLogs continue spilling to disk until storage is exhausted
+   - **No hard time limit for backup workers**: Unlike datacenter lag (MAX_VERSION_DIFFERENCE), backup worker lag doesn't force recovery
+   - **Operational monitoring required**: Must monitor disk usage and backup worker progress to prevent disk exhaustion
    
-4. **Cascade Effects**:
-   - **Before hitting limit**:
-     - Increased memory pressure
-     - Disk I/O saturation from spilling
-     - Slower commit latencies
-     - Possible OOM if disk spilling fails
-   - **After hitting limit**:
-     - Cluster enters recovery
-     - All in-flight transactions abort
-     - Service disruption until resolved
+4. **Cascade Effects of Slow Backup Workers**:
+   - **Progressive degradation**:
+     - Increased memory pressure as cache fills
+     - Disk I/O saturation from continuous spilling
+     - Slower commit latencies due to I/O contention
+     - Growing disk usage over hours/days
+   - **Critical failure scenarios**:
+     - Disk exhaustion after extended accumulation
+     - Possible OOM if disk operations fail
+     - Manual intervention required to resolve
 
 5. **Automatic Mitigation Mechanisms**:
    - **NOOP Mode**: If no backups active, workers continue popping without processing
@@ -536,20 +538,20 @@ The system has multiple layers of protection:
 
 2. **Version Lag Monitoring**:
    - **Tracked metric**: Difference between committed version and minimum popped version
-   - **Early warning**: Alerts before hitting critical thresholds (MAX_VERSION_DIFFERENCE)
-   - **Automatic action**: Can trigger worker restart or recovery
+   - **Early warning**: Alerts on growing lag to prevent disk exhaustion
+   - **Operational response**: Administrators must intervene when lag grows excessive
 
-3. **Hard Stops**:
-   - **TLog version lag limit**: At MAX_VERSION_DIFFERENCE (20 million versions), stops accepting new mutations
-   - **Forces recovery**: Triggers `tlog_stopped` error to ensure system doesn't accumulate unbounded state
-   - **Protects stability**: Prevents memory/disk exhaustion
+3. **Protective Mechanisms**:
+   - **Disk space monitoring**: Track available storage for TLog spilling
+   - **Backup worker health checks**: Detect and replace failed workers
+   - **Manual intervention options**: Can disable backup workers or adjust configuration
 
 4. **Operational Controls**:
    - **Disable backup workers**: Can be done without recovery via configuration
    - **Adjust memory cache**: Can tune TLOG_SPILL_THRESHOLD knob for workload
    - **Monitor metrics**: Track pop version lag, disk queue size, memory usage
 
-**Critical Insight**: The TLog's inability to accumulate mutations forever is a FEATURE, not a bug. It forces the system to address slow consumers (within ~20 seconds at 1M versions/sec) rather than accumulating unbounded state that could cause catastrophic failure.
+**Critical Insight**: While TLogs can accumulate data for extended periods (24+ hours) when backup workers are slow, this requires careful operational monitoring. The system prioritizes data durability over forced recovery, allowing administrators time to resolve backup worker issues before disk exhaustion occurs. The MAX_VERSION_DIFFERENCE limit (20 seconds) applies to datacenter replication lag, not backup worker lag.
 
 ## Performance Considerations
 
