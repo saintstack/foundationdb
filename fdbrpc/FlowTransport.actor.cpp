@@ -1914,6 +1914,14 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 }
 
 void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* receiver, TaskPriority taskID) {
+	static bool debugLogged = false;
+	if (!debugLogged) {
+		TraceEvent(SevWarnAlways, "AddEndpointCalled")
+			.detail("IsSimulated", g_network && g_network->isSimulated())
+			.detail("GNetworkExists", g_network != nullptr);
+		debugLogged = true;
+	}
+	
 	if (g_network && g_network->isSimulated()) {
 		// In simulation: Generate truly unique tokens across all processes to prevent collisions
 		static uint64_t counter = 0;  // Simple static counter - only one thread per simulated process
