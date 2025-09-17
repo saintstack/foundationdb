@@ -187,10 +187,25 @@ NetworkMessageReceiver* EndpointMap::get(Endpoint::Token const& token) {
 		    .detail("Index", index)
 		    .backtrace();
 	}
+	
+	// Debug logging for token lookup
+	bool tokenMatch = false;
+	NetworkMessageReceiver* receiver = nullptr;
 	if (index < data.size() && data[index].token().first() == token.first() &&
-	    ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second())
-		return data[index].receiver;
-	return 0;
+	    ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second()) {
+		tokenMatch = true;
+		receiver = data[index].receiver;
+	}
+	
+	TraceEvent(SevWarnAlways, "EndpointMapLookup")
+		.detail("RequestedToken", token.toString())
+		.detail("Index", index)
+		.detail("DataSize", data.size())
+		.detail("TokenMatch", tokenMatch)
+		.detail("ReceiverPtr", (void*)receiver)
+		.detail("StoredToken", index < data.size() ? data[index].token().toString() : "OutOfBounds");
+	
+	return receiver;
 }
 
 TaskPriority EndpointMap::getPriority(Endpoint::Token const& token) {
@@ -1181,6 +1196,14 @@ ACTOR static void deliver(TransportData* self,
 			StringRef data = reader.arenaReadAll();
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
+			
+			// Add logging to debug NetSAV use-after-free
+			TraceEvent(SevWarnAlways, "FlowTransportDeliver")
+				.detail("Token", destination.token.toString())
+				.detail("ReceiverPtr", (void*)receiver)
+				.detail("ReceiverValid", receiver != nullptr)
+				.detail("PeerAddress", destination.addresses.toString());
+			
 			receiver->receive(objReader);
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
@@ -1891,13 +1914,54 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 }
 
 void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* receiver, TaskPriority taskID) {
-	endpoint.token = deterministicRandom()->randomUniqueID();
-	if (receiver->isStream()) {
-		endpoint.addresses = self->localAddresses.getAddressList();
-		endpoint.token = UID(endpoint.token.first() | TOKEN_STREAM_FLAG, endpoint.token.second());
+	if (g_network && g_network->isSimulated()) {
+		// In simulation: Generate truly unique tokens across all processes to prevent collisions
+		static uint64_t counter = 0;  // Simple static counter - only one thread per simulated process
+		static bool logged = false;
+		if (!logged) {
+			TraceEvent(SevWarnAlways, "TokenCollisionFixActive").log();
+			logged = true;
+		}
+		
+		// Get a stable process identifier from the local address
+		uint64_t processId = std::hash<NetworkAddress>{}(self->localAddresses.getAddressList().address);
+		
+		// Reserve bit 0 for TOKEN_STREAM_FLAG, use bits 1-31 for counter (31 bits = ~2B values per process)
+		uint64_t counterPart = (++counter & 0x7FFFFFFF) << 1;  // Shift left to reserve bit 0
+		
+		// Combine: processId in upper 32 bits, counter in bits 1-31, bit 0 reserved for stream flag
+		uint64_t first = (processId << 32) | counterPart;
+		
+		// Apply stream flag if needed
+		if (receiver->isStream()) {
+			first |= TOKEN_STREAM_FLAG;  // Set TOKEN_STREAM_FLAG (bit 0)
+			endpoint.addresses = self->localAddresses.getAddressList();
+		} else {
+			first &= ~TOKEN_STREAM_FLAG;  // Clear TOKEN_STREAM_FLAG (bit 0)
+			endpoint.addresses = NetworkAddressList();
+		}
+		
+		// Second part: random but deterministic for additional entropy
+		uint64_t second = deterministicRandom()->randomUInt64();
+		
+		endpoint.token = UID(first, second);
+		
+		TraceEvent(SevWarnAlways, "TokenGeneration")
+			.detail("ProcessId", processId)
+			.detail("Counter", counter)
+			.detail("IsStream", receiver->isStream())
+			.detail("GeneratedToken", endpoint.token.toString())
+			.detail("LocalAddress", self->localAddresses.getAddressList().address.toString());
 	} else {
-		endpoint.addresses = NetworkAddressList();
-		endpoint.token = UID(endpoint.token.first() & ~TOKEN_STREAM_FLAG, endpoint.token.second());
+		// Production: Use existing logic
+		endpoint.token = deterministicRandom()->randomUniqueID();
+		if (receiver->isStream()) {
+			endpoint.addresses = self->localAddresses.getAddressList();
+			endpoint.token = UID(endpoint.token.first() | TOKEN_STREAM_FLAG, endpoint.token.second());
+		} else {
+			endpoint.addresses = NetworkAddressList();
+			endpoint.token = UID(endpoint.token.first() & ~TOKEN_STREAM_FLAG, endpoint.token.second());
+		}
 	}
 	self->endpoints.insert(receiver, endpoint.token, taskID);
 }

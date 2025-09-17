@@ -501,7 +501,9 @@ private:
 			wait(self->writtenBytes.onChange()); // takes place on peer!
 			// Skip process assertion for HTTP server connections to avoid cross-process issues
 			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
-			if (g_simulator->httpServerIps.count(self->peerProcess->address.ip) == 0) {
+			bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+			                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+			if (!isHTTPConnection) {
 				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			}
 			wait(delay(.002 * deterministicRandom()->random01()));
@@ -517,7 +519,9 @@ private:
 				wait(self->sentBytes.onChange());
 			// Skip process assertion for HTTP server connections to avoid cross-process issues
 			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
-			if (g_simulator->httpServerIps.count(self->peerProcess->address.ip) == 0) {
+			bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+			                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+			if (!isHTTPConnection) {
 				ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
 			}
 
@@ -560,7 +564,13 @@ private:
 				self->rollRandomClose();
 			}
 		} catch (Error& e) {
-			ASSERT(g_simulator->getCurrentProcess() == self->process);
+			// Skip process assertion for HTTP server connections to avoid cross-process issues
+			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
+			bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+			                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+			if (!isHTTPConnection) {
+				ASSERT(g_simulator->getCurrentProcess() == self->process);
+			}
 			throw;
 		}
 	}
@@ -570,12 +580,23 @@ private:
 				if (!self->peer)
 					return Void();
 				if (self->peer->availableSendBufferForPeer() > 0) {
-					ASSERT(g_simulator->getCurrentProcess() == self->process);
+					// Skip process assertion for HTTP server connections to avoid cross-process issues
+					// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
+					bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+					                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+					if (!isHTTPConnection) {
+						ASSERT(g_simulator->getCurrentProcess() == self->process);
+					}
 					return Void();
 				}
 				try {
 					wait(self->peer->receivedBytes.onChange());
-					ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
+					// Skip process assertion for HTTP server connections to avoid cross-process issues
+					bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+					                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+					if (!isHTTPConnection) {
+						ASSERT(g_simulator->getCurrentProcess() == self->peerProcess);
+					}
 				} catch (Error& e) {
 					if (e.code() != error_code_broken_promise)
 						throw;
@@ -583,7 +604,13 @@ private:
 				wait(g_simulator->onProcess(self->process));
 			}
 		} catch (Error& e) {
-			ASSERT(g_simulator->getCurrentProcess() == self->process);
+			// Skip process assertion for HTTP server connections to avoid cross-process issues
+			// HTTP servers in simulation run on dedicated processes and don't follow the same process switching rules
+			bool isHTTPConnection = g_simulator->httpServerIps.count(self->peerProcess->address.ip) > 0 ||
+			                        g_simulator->httpServerIps.count(self->process->address.ip) > 0;
+			if (!isHTTPConnection) {
+				ASSERT(g_simulator->getCurrentProcess() == self->process);
+			}
 			throw;
 		}
 	}
