@@ -1923,6 +1923,7 @@ void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* rece
 	}
 	
 	if (g_network && g_network->isSimulated()) {
+		TraceEvent(SevWarnAlways, "SimulationBranchEntered").log();
 		// In simulation: Generate truly unique tokens across all processes to prevent collisions
 		static uint64_t counter = 0;  // Simple static counter - only one thread per simulated process
 		static bool logged = false;
