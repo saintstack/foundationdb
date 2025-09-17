@@ -165,10 +165,32 @@ const Endpoint& EndpointMap::insert(NetworkAddressList localAddresses,
 		}
 	}
 
-	UID base = deterministicRandom()->randomUniqueID();
+	UID base;
+	if (g_network && g_network->isSimulated()) {
+		// In simulation: Use process-aware token generation to prevent collisions
+		static uint64_t streamCounter = 0;
+		uint64_t processId = std::hash<NetworkAddress>{}(localAddresses.address);
+		uint64_t counterPart = (++streamCounter & 0x7FFFFFFF) << 1;
+		uint64_t first = (processId << 32) | counterPart | TOKEN_STREAM_FLAG;
+		uint64_t second = deterministicRandom()->randomUInt64();
+		base = UID(first, second);
+		// Debug logging removed - was causing TracedTooManyLines crash
+	} else {
+		base = deterministicRandom()->randomUniqueID();
+	}
+	
 	for (uint64_t i = 0; i < streams.size(); i++) {
 		int index = adjacentStart + i;
-		uint64_t first = (base.first() + (i << 32)) | TOKEN_STREAM_FLAG;
+		uint64_t first;
+		if (g_network && g_network->isSimulated()) {
+			// In simulation: Create unique tokens for each stream in the batch
+			static uint64_t batchCounter = 0;
+			uint64_t processId = std::hash<NetworkAddress>{}(localAddresses.address);
+			uint64_t counterPart = ((++batchCounter + i) & 0x7FFFFFFF) << 1;
+			first = (processId << 32) | counterPart | TOKEN_STREAM_FLAG;
+		} else {
+			first = (base.first() + (i << 32)) | TOKEN_STREAM_FLAG;
+		}
 		streams[i].first->setEndpoint(
 		    Endpoint(localAddresses, UID(first, (base.second() & 0xffffffff00000000LL) | index)));
 		data[index].token() =
@@ -197,13 +219,13 @@ NetworkMessageReceiver* EndpointMap::get(Endpoint::Token const& token) {
 		receiver = data[index].receiver;
 	}
 	
-	TraceEvent(SevWarnAlways, "EndpointMapLookup")
-		.detail("RequestedToken", token.toString())
-		.detail("Index", index)
-		.detail("DataSize", data.size())
-		.detail("TokenMatch", tokenMatch)
-		.detail("ReceiverPtr", (void*)receiver)
-		.detail("StoredToken", index < data.size() ? data[index].token().toString() : "OutOfBounds");
+	// Only log token mismatches to avoid TracedTooManyLines
+	if (!tokenMatch && index < data.size()) {
+		TraceEvent(SevWarnAlways, "TokenMismatch")
+			.detail("RequestedToken", token.toString())
+			.detail("StoredToken", data[index].token().toString())
+			.detail("Index", index);
+	}
 	
 	return receiver;
 }
@@ -1197,12 +1219,12 @@ ACTOR static void deliver(TransportData* self,
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
 			
-			// Add logging to debug NetSAV use-after-free
-			TraceEvent(SevWarnAlways, "FlowTransportDeliver")
-				.detail("Token", destination.token.toString())
-				.detail("ReceiverPtr", (void*)receiver)
-				.detail("ReceiverValid", receiver != nullptr)
-				.detail("PeerAddress", destination.addresses.toString());
+			// Only log if receiver is null to catch use-after-free
+			if (!receiver) {
+				TraceEvent(SevError, "NullReceiver")
+					.detail("Token", destination.token.toString())
+					.detail("PeerAddress", destination.addresses.toString());
+			}
 			
 			receiver->receive(objReader);
 			g_currentDeliveryPeerAddress = NetworkAddressList();
@@ -1955,12 +1977,7 @@ void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* rece
 		
 		endpoint.token = UID(first, second);
 		
-		TraceEvent(SevWarnAlways, "TokenGeneration")
-			.detail("ProcessId", processId)
-			.detail("Counter", counter)
-			.detail("IsStream", receiver->isStream())
-			.detail("GeneratedToken", endpoint.token.toString())
-			.detail("LocalAddress", self->localAddresses.getAddressList().address.toString());
+		// Debug logging removed - was causing TracedTooManyLines crash
 	} else {
 		// Production: Use existing logic
 		endpoint.token = deterministicRandom()->randomUniqueID();
