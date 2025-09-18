@@ -1080,6 +1080,13 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 	req->data.headers["Host"] = bstore->host;
 	req->data.headers["Accept"] = "application/xml";
 
+	
+	// In simulation, disable connection pooling for MockS3 to prevent NetSAV use-after-free crashes
+	// This forces connection closure after each request, preventing race conditions during coordinator shutdown
+	if (g_network->isSimulated() && bstore->host == "127.0.0.1") {
+		req->data.headers["Connection"] = "close";
+	}
+
 	// Avoid to send request with an empty resource.
 	if (resource.empty()) {
 		resource = "/";
