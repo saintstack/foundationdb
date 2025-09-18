@@ -1,51 +1,20 @@
 testClass = "Backup"
-buggify = false
-
-[configuration]
-simulationNormalRunTestsTimeoutSeconds = 3600
-# Force simple single datacenter configuration
-simpleConfig = true
-# Disable fault injection to prevent MockS3/FlowTransport shutdown race conditions
-faultInjection = false
-
-# Disable all fault injection and network failures
-# buggify = false now controls ALL fault injection systems (BUGGIFY, failure workloads, AND global fault injection)
-
-[[knobs]]
-# Disable fault injection
-bulkload_sim_failure_injection = false
-max_trace_lines = 5000000
-
 
 [[test]]
 testTitle = 'BackupAndRestoreS3'
 clearAfterTest = false
 simBackupAgents = 'BackupToFile'
-timeout = 3600
-# Completely disable fault injection workloads to prevent operation_cancelled errors
-runFailureWorkloads = false
-
 
     [[test.workload]]
     testName = 'Cycle'
-    nodeCount = 50
-    transactionsPerSecond = 5.0
+    nodeCount = 30
+    transactionsPerSecond = 25.0
     testDuration = 10.0
     expectedRate = 0
 
     [[test.workload]]
     testName = 'BackupAndRestoreCorrectness'
-    backupAfter = 20.0
-    restoreAfter = 40.0
+    backupAfter = 10.0
+    restoreAfter = 30.0
     backupRangesCount = 1
-    performRestore = true
-    differentialBackup = false
-    abortAndRestartAfter = 0.0
-    stopDifferentialAfter = 0.0
-    allowPauses = false
-    initSnapshotInterval = 0
-    snapshotInterval = 30
     backupURL = 'blobstore://mocks3:mocksecret:mocktoken@127.0.0.1:8080/backup_container?bucket=backup_bucket&region=us-east-1&secure_connection=0&cwpf=1&cu=1'
-
-    # Removed RandomClogging, Rollback, and ReadWrite workloads to prevent data corruption
-    # Cycle workload provides both data generation and verification

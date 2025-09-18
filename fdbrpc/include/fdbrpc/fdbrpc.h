@@ -83,6 +83,13 @@ public:
 		ASSERT(!endpoint.isValid());
 		m_isLocalEndpoint = true;
 		endpoint = e;
+		
+		// Track creation of the crashing token via setEndpoint
+		if (e.token.first() == 0x030403030002deb4ULL && e.token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_SETENDPOINT_CREATED: Token %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)e.token.first(), (unsigned long long)e.token.second(), this);
+			fflush(stdout);
+		}
 	}
 
 	void setPeerCompatibilityPolicy(const PeerCompatibilityPolicy& policy) { peerCompatibilityPolicy_ = policy; }
@@ -95,6 +102,14 @@ public:
 		ASSERT(!endpoint.isValid());
 		m_isLocalEndpoint = true;
 		endpoint.token = token;
+		
+		// Track creation of the crashing token via well-known endpoint
+		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_WELLKNOWN_CREATED: Token %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)token.first(), (unsigned long long)token.second(), this);
+			fflush(stdout);
+		}
+		
 		FlowTransport::transport().addWellKnownEndpoint(endpoint, this, taskID);
 	}
 

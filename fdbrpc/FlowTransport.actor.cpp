@@ -28,6 +28,22 @@
 #include <cstdint>
 #include <fstream>
 #include <string>
+
+// Helper function to get shared counter for simulation token generation
+// 
+// In FDB simulation, multiple simulated processes run in the same OS process but need
+// unique endpoint tokens to avoid collisions. This function provides a process-global
+// counter that ensures uniqueness across both individual endpoint creation 
+// (FlowTransport::addEndpoint) and batch stream endpoint creation (EndpointMap::insert).
+//
+// The counter is combined with a process-specific ID (derived from IP address) to create
+// tokens that are unique both within a process (via counter) and across processes (via IP).
+//
+// Returns: Next sequential counter value (1, 2, 3, ...)
+static uint64_t getNextSimulationTokenCounter() {
+	static uint64_t counter = 0;
+	return ++counter;
+}
 #include <unordered_map>
 #if VALGRIND
 #include <memcheck.h>
@@ -127,6 +143,13 @@ void EndpointMap::insertWellKnown(NetworkMessageReceiver* r, const Endpoint::Tok
 	data[index].receiver = r;
 	data[index].token() =
 	    Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(priority));
+	
+	// Track when the crashing token gets inserted into EndpointMap (well-known)
+	if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+		printf("CRASH_TOKEN_WELLKNOWN_INSERT: Token %016llx%016llx, Receiver %p, Index %d\n", 
+		       (unsigned long long)token.first(), (unsigned long long)token.second(), r, index);
+		fflush(stdout);
+	}
 }
 
 void EndpointMap::insert(NetworkMessageReceiver* r, Endpoint::Token& token, TaskPriority priority) {
@@ -134,10 +157,39 @@ void EndpointMap::insert(NetworkMessageReceiver* r, Endpoint::Token& token, Task
 		realloc();
 	int index = firstFree;
 	firstFree = data[index].nextFree;
+	
+	// Check if we're overwriting an existing slot - this indicates memory corruption
+	if (data[index].receiver != nullptr) {
+		TraceEvent(SevError, "EndpointSlotOverwrite")
+			.detail("Index", index)
+			.detail("OldReceiver", (void*)data[index].receiver)
+			.detail("OldToken", data[index].token().toString())
+			.detail("NewReceiver", (void*)r)
+			.detail("NewToken", token.toString())
+			.detail("DataSize", data.size())
+			.detail("FirstFree", firstFree);
+	}
+	
 	token = Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | index);
 	data[index].token() =
 	    Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(priority));
 	data[index].receiver = r;
+	
+	// Track when the crashing token gets inserted into EndpointMap (regular)
+	if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+		printf("CRASH_TOKEN_REGULAR_INSERT: Token %016llx%016llx, Receiver %p, Index %d\n", 
+		       (unsigned long long)token.first(), (unsigned long long)token.second(), r, index);
+		fflush(stdout);
+	}
+	
+	// Log endpoint creation for tracking
+	TraceEvent(SevInfo, "EndpointCreated")
+		.suppressFor(0.1)
+		.detail("Token", token.toString())
+		.detail("Index", index)
+		.detail("ReceiverPtr", (void*)r)
+		.detail("Priority", static_cast<int>(priority))
+		.detail("DataSize", data.size());
 }
 
 const Endpoint& EndpointMap::insert(NetworkAddressList localAddresses,
@@ -165,34 +217,47 @@ const Endpoint& EndpointMap::insert(NetworkAddressList localAddresses,
 		}
 	}
 
+	// Generate base token for batch stream creation
 	UID base;
 	if (g_network && g_network->isSimulated()) {
-		// In simulation: Use process-aware token generation to prevent collisions
-		static uint64_t streamCounter = 0;
-		uint64_t processId = std::hash<NetworkAddress>{}(localAddresses.address);
-		uint64_t counterPart = (++streamCounter & 0x7FFFFFFF) << 1;
-		uint64_t first = (processId << 32) | counterPart | TOKEN_STREAM_FLAG;
+		// Create truly unique process ID from IP and port (no hash collisions)
+		uint64_t processId;
+		if (localAddresses.address.ip.isV4()) {
+			// For IPv4: use IP in upper 32 bits, counter in lower 32 bits
+			uint32_t ip = localAddresses.address.ip.toV4();
+			processId = static_cast<uint64_t>(ip) << 32;
+		} else {
+			// For IPv6: XOR all bytes to create a unique 32-bit value
+			const auto& v6addr = localAddresses.address.ip.toV6();
+			uint32_t hash = 0;
+			for (int i = 0; i < 16; i++) {
+				hash ^= v6addr[i] << ((i % 4) * 8);
+			}
+			processId = static_cast<uint64_t>(hash) << 32;
+		}
+		uint64_t counter = getNextSimulationTokenCounter();
+		uint64_t first = processId | (counter & 0xFFFFFFFF);
 		uint64_t second = deterministicRandom()->randomUInt64();
 		base = UID(first, second);
-		// Debug logging removed - was causing TracedTooManyLines crash
+		
 	} else {
 		base = deterministicRandom()->randomUniqueID();
 	}
 	
 	for (uint64_t i = 0; i < streams.size(); i++) {
 		int index = adjacentStart + i;
-		uint64_t first;
-		if (g_network && g_network->isSimulated()) {
-			// In simulation: Create unique tokens for each stream in the batch
-			static uint64_t batchCounter = 0;
-			uint64_t processId = std::hash<NetworkAddress>{}(localAddresses.address);
-			uint64_t counterPart = ((++batchCounter + i) & 0x7FFFFFFF) << 1;
-			first = (processId << 32) | counterPart | TOKEN_STREAM_FLAG;
-		} else {
-			first = (base.first() + (i << 32)) | TOKEN_STREAM_FLAG;
+		uint64_t first = (base.first() + (i << 32)) | TOKEN_STREAM_FLAG;
+		UID token(first, (base.second() & 0xffffffff00000000LL) | index);
+		
+		// Track creation of the crashing token via batch creation
+		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_BATCH_CREATED: Token %016llx%016llx, Receiver %p, Index %d\n", 
+			       (unsigned long long)token.first(), (unsigned long long)token.second(), 
+			       (NetworkMessageReceiver*)streams[i].first, index);
+			fflush(stdout);
 		}
-		streams[i].first->setEndpoint(
-		    Endpoint(localAddresses, UID(first, (base.second() & 0xffffffff00000000LL) | index)));
+		
+		streams[i].first->setEndpoint(Endpoint(localAddresses, token));
 		data[index].token() =
 		    Endpoint::Token(first, (base.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(streams[i].second));
 		data[index].receiver = (NetworkMessageReceiver*)streams[i].first;
@@ -210,24 +275,47 @@ NetworkMessageReceiver* EndpointMap::get(Endpoint::Token const& token) {
 		    .backtrace();
 	}
 	
-	// Debug logging for token lookup
-	bool tokenMatch = false;
-	NetworkMessageReceiver* receiver = nullptr;
-	if (index < data.size() && data[index].token().first() == token.first() &&
-	    ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second()) {
-		tokenMatch = true;
-		receiver = data[index].receiver;
+	// Standard token validation
+	bool indexValid = index < data.size();
+	bool firstMatch = indexValid && (data[index].token().first() == token.first());
+	bool secondMatch = indexValid && (((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second());
+	bool tokenMatch = indexValid && firstMatch && secondMatch;
+	
+	
+	if (tokenMatch) {
+		NetworkMessageReceiver* receiver = data[index].receiver;
+		
+		// Critical: Check for slot overwrite - null receiver with valid token means memory corruption
+		if (!receiver) {
+			TraceEvent(SevError, "SlotOverwriteDetected")
+				.detail("RequestedToken", token.toString())
+				.detail("StoredToken", data[index].token().toString())
+				.detail("Index", index)
+				.detail("DataSize", data.size())
+				.detail("WellKnownCount", wellKnownEndpointCount);
+		}
+		
+		return receiver;
 	}
 	
-	// Only log token mismatches to avoid TracedTooManyLines
-	if (!tokenMatch && index < data.size()) {
-		TraceEvent(SevWarnAlways, "TokenMismatch")
+	// Token mismatch - likely a message for a destroyed endpoint (normal in distributed systems)
+	if (index < data.size()) {
+		TraceEvent(SevWarn, "TokenMismatch")
+			.suppressFor(1.0)
 			.detail("RequestedToken", token.toString())
 			.detail("StoredToken", data[index].token().toString())
-			.detail("Index", index);
+			.detail("Index", index)
+			.detail("RequestedFirst", format("0x%016llx", token.first()))
+			.detail("StoredFirst", format("0x%016llx", data[index].token().first()))
+			.detail("RequestedSecond", format("0x%016llx", token.second()))
+			.detail("StoredSecond", format("0x%016llx", data[index].token().second()))
+			.detail("DataSize", data.size())
+			.detail("ReceiverPtr", (void*)data[index].receiver);
 	}
 	
-	return receiver;
+	
+	// Token not found or mismatch
+	return nullptr;
 }
 
 TaskPriority EndpointMap::getPriority(Endpoint::Token const& token) {
@@ -245,14 +333,48 @@ TaskPriority EndpointMap::getPriority(Endpoint::Token const& token) {
 
 void EndpointMap::remove(Endpoint::Token const& token, NetworkMessageReceiver* r) {
 	uint32_t index = token.second();
+	
+	// Track removal of the crashing token
+	if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+		printf("CRASH_TOKEN_REMOVE_ATTEMPT: Token %016llx%016llx, Receiver %p, Index %d\n", 
+		       (unsigned long long)token.first(), (unsigned long long)token.second(), r, index);
+		if (index < data.size()) {
+			printf("CRASH_TOKEN_REMOVE_STORED: StoredToken %016llx%016llx, StoredReceiver %p\n",
+			       (unsigned long long)data[index].token().first(), (unsigned long long)data[index].token().second(),
+			       data[index].receiver);
+		}
+		fflush(stdout);
+	}
+	
 	if (index < wellKnownEndpointCount) {
 		data[index].receiver = nullptr;
+		
+		// Track successful well-known removal
+		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_WELLKNOWN_REMOVED: Token %016llx%016llx\n", 
+			       (unsigned long long)token.first(), (unsigned long long)token.second());
+			fflush(stdout);
+		}
 	} else if (index < data.size() && data[index].token().first() == token.first() &&
 	           ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second() &&
 	           data[index].receiver == r) {
 		data[index].receiver = 0;
 		data[index].nextFree = firstFree;
 		firstFree = index;
+		
+		// Track successful regular removal
+		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_REGULAR_REMOVED: Token %016llx%016llx\n", 
+			       (unsigned long long)token.first(), (unsigned long long)token.second());
+			fflush(stdout);
+		}
+	} else {
+		// Track failed removal
+		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_REMOVE_FAILED: Token %016llx%016llx, Receiver %p, Index %d\n", 
+			       (unsigned long long)token.first(), (unsigned long long)token.second(), r, index);
+			fflush(stdout);
+		}
 	}
 }
 
@@ -1219,14 +1341,19 @@ ACTOR static void deliver(TransportData* self,
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
 			
-			// Only log if receiver is null to catch use-after-free
-			if (!receiver) {
-				TraceEvent(SevError, "NullReceiver")
-					.detail("Token", destination.token.toString())
-					.detail("PeerAddress", destination.addresses.toString());
+			// CRITICAL: About to call receiver->receive() - this will crash with __cxa_pure_virtual
+			// Track the specific crashing token
+			if (destination.token.first() == 0x030403030002deb4ULL && destination.token.second() == 0xe12ae2af00000061ULL) {
+				printf("CRASH_TOKEN_DELIVERY: Token %016llx%016llx, Receiver %p\n", 
+				       (unsigned long long)destination.token.first(), (unsigned long long)destination.token.second(), receiver);
+				printf("CRASH_TOKEN_ENDPOINT_CHECK: Current receiver from EndpointMap: %p\n", 
+				       self->endpoints.get(destination.token));
+				fflush(stdout);
 			}
 			
 			receiver->receive(objReader);
+			
+			// SUCCESS: receiver->receive() completed without crashing
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
@@ -1234,11 +1361,7 @@ ACTOR static void deliver(TransportData* self,
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
-			TraceEvent(SevError, "ReceiverError")
-			    .error(e)
-			    .detail("Token", destination.token.toString())
-			    .detail("Peer", destination.getPrimaryAddress())
-			    .detail("PeerAddress", destination.getPrimaryAddress());
+			// CRITICAL: receiver->receive() threw an exception - likely __cxa_pure_virtual
 			if (!FlowTransport::isClient()) {
 				flushAndExit(FDB_EXIT_ERROR);
 			}
@@ -1935,60 +2058,82 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 	}
 }
 
+
 void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* receiver, TaskPriority taskID) {
-	static bool debugLogged = false;
-	if (!debugLogged) {
-		TraceEvent(SevWarnAlways, "AddEndpointCalled")
-			.detail("IsSimulated", g_network && g_network->isSimulated())
-			.detail("GNetworkExists", g_network != nullptr);
-		debugLogged = true;
-	}
-	
+	// Generate unique token for this endpoint
 	if (g_network && g_network->isSimulated()) {
-		TraceEvent(SevWarnAlways, "SimulationBranchEntered").log();
-		// In simulation: Generate truly unique tokens across all processes to prevent collisions
-		static uint64_t counter = 0;  // Simple static counter - only one thread per simulated process
-		static bool logged = false;
-		if (!logged) {
-			TraceEvent(SevWarnAlways, "TokenCollisionFixActive").log();
-			logged = true;
-		}
-		
-		// Get a stable process identifier from the local address
-		uint64_t processId = std::hash<NetworkAddress>{}(self->localAddresses.getAddressList().address);
-		
-		// Reserve bit 0 for TOKEN_STREAM_FLAG, use bits 1-31 for counter (31 bits = ~2B values per process)
-		uint64_t counterPart = (++counter & 0x7FFFFFFF) << 1;  // Shift left to reserve bit 0
-		
-		// Combine: processId in upper 32 bits, counter in bits 1-31, bit 0 reserved for stream flag
-		uint64_t first = (processId << 32) | counterPart;
-		
-		// Apply stream flag if needed
-		if (receiver->isStream()) {
-			first |= TOKEN_STREAM_FLAG;  // Set TOKEN_STREAM_FLAG (bit 0)
-			endpoint.addresses = self->localAddresses.getAddressList();
+		// Create truly unique process ID from IP and port (no hash collisions)
+		NetworkAddress addr = self->localAddresses.getAddressList().address;
+		uint64_t processId;
+		if (addr.ip.isV4()) {
+			// For IPv4: use IP in upper 32 bits, counter in lower 32 bits
+			uint32_t ip = addr.ip.toV4();
+			processId = static_cast<uint64_t>(ip) << 32;
 		} else {
-			first &= ~TOKEN_STREAM_FLAG;  // Clear TOKEN_STREAM_FLAG (bit 0)
-			endpoint.addresses = NetworkAddressList();
+			// For IPv6: XOR all bytes to create a unique 32-bit value
+			const auto& v6addr = addr.ip.toV6();
+			uint32_t hash = 0;
+			for (int i = 0; i < 16; i++) {
+				hash ^= v6addr[i] << ((i % 4) * 8);
+			}
+			processId = static_cast<uint64_t>(hash) << 32;
 		}
-		
-		// Second part: random but deterministic for additional entropy
+		uint64_t counter = getNextSimulationTokenCounter();
+		uint64_t first = processId | (counter & 0xFFFFFFFF);
 		uint64_t second = deterministicRandom()->randomUInt64();
-		
 		endpoint.token = UID(first, second);
 		
-		// Debug logging removed - was causing TracedTooManyLines crash
+		// Track ALL token generation in simulation
+		if (endpoint.token.first() == 0x030403030002deb4ULL && endpoint.token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_GENERATED_SIM: Token %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)endpoint.token.first(), (unsigned long long)endpoint.token.second(), receiver);
+			fflush(stdout);
+		}
+		
+		// Token collision fix: Process-unique tokens generated for simulation
 	} else {
-		// Production: Use existing logic
 		endpoint.token = deterministicRandom()->randomUniqueID();
-		if (receiver->isStream()) {
-			endpoint.addresses = self->localAddresses.getAddressList();
-			endpoint.token = UID(endpoint.token.first() | TOKEN_STREAM_FLAG, endpoint.token.second());
-		} else {
-			endpoint.addresses = NetworkAddressList();
-			endpoint.token = UID(endpoint.token.first() & ~TOKEN_STREAM_FLAG, endpoint.token.second());
+		
+		// Track non-simulation token generation too
+		if (endpoint.token.first() == 0x030403030002deb4ULL && endpoint.token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_GENERATED_NONSIM: Token %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)endpoint.token.first(), (unsigned long long)endpoint.token.second(), receiver);
+			fflush(stdout);
 		}
 	}
+	
+	if (receiver->isStream()) {
+		endpoint.addresses = self->localAddresses.getAddressList();
+		UID oldToken = endpoint.token;
+		endpoint.token = UID(endpoint.token.first() | TOKEN_STREAM_FLAG, endpoint.token.second());
+		
+		// Track token modification for streams
+		if (endpoint.token.first() == 0x030403030002deb4ULL && endpoint.token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_STREAM_MODIFIED: Old %016llx%016llx -> New %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)oldToken.first(), (unsigned long long)oldToken.second(),
+			       (unsigned long long)endpoint.token.first(), (unsigned long long)endpoint.token.second(), receiver);
+			fflush(stdout);
+		}
+	} else {
+		endpoint.addresses = NetworkAddressList();
+		UID oldToken = endpoint.token;
+		endpoint.token = UID(endpoint.token.first() & ~TOKEN_STREAM_FLAG, endpoint.token.second());
+		
+		// Track token modification for non-streams
+		if (endpoint.token.first() == 0x030403030002deb4ULL && endpoint.token.second() == 0xe12ae2af00000061ULL) {
+			printf("CRASH_TOKEN_NONSTREAM_MODIFIED: Old %016llx%016llx -> New %016llx%016llx, Receiver %p\n", 
+			       (unsigned long long)oldToken.first(), (unsigned long long)oldToken.second(),
+			       (unsigned long long)endpoint.token.first(), (unsigned long long)endpoint.token.second(), receiver);
+			fflush(stdout);
+		}
+	}
+	// Track creation of the crashing token
+	if (endpoint.token.first() == 0x030403030002deb4ULL && endpoint.token.second() == 0xe12ae2af00000061ULL) {
+		printf("CRASH_TOKEN_CREATED: Token %016llx%016llx, Receiver %p\n", 
+		       (unsigned long long)endpoint.token.first(), (unsigned long long)endpoint.token.second(), receiver);
+		fflush(stdout);
+	}
+	
 	self->endpoints.insert(receiver, endpoint.token, taskID);
 }
 
