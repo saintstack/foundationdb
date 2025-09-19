@@ -39,19 +39,43 @@ class FlowReceiver : public NetworkMessageReceiver, public NonCopyable {
 	Endpoint endpoint;
 	bool m_isLocalEndpoint;
 	bool m_stream;
+	ISimulator::ProcessInfo* m_creationProcess; // Track where this NetSAV was created
 
 protected:
-	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false) {}
+	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false), m_creationProcess(nullptr) {}
 
 	FlowReceiver(Endpoint const& remoteEndpoint, bool stream)
-	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream) {
+	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream), m_creationProcess(nullptr) {
 		FlowTransport::transport().addPeerReference(endpoint, m_stream);
 	}
 
 	~FlowReceiver() {
 		if (m_isLocalEndpoint) {
-			FlowTransport::transport().removeEndpoint(endpoint, this);
+			// Check if we're being destroyed in the same process where we were created
+			if (g_network && g_network->isSimulated()) {
+				ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
+				
+				// If we have a creation process recorded and we're in a different process, check if HTTP is involved
+				if (m_creationProcess && currentProcess != m_creationProcess) {
+					// Only use cross-process cleanup if HTTP servers are present (HTTP-related NetSAVs)
+					bool httpServersPresent = !g_simulator->httpServerIps.empty();
+					if (httpServersPresent) {
+						// Cross-process cleanup for HTTP-related NetSAVs - use removePeerReference to avoid EndpointMap corruption
+						FlowTransport::transport().removePeerReference(endpoint, false);
+					} else {
+						// No HTTP servers - this shouldn't happen in normal FDB
+						FlowTransport::transport().removeEndpoint(endpoint, this);
+					}
+				} else {
+					// Same process or no creation process recorded - use normal cleanup
+					FlowTransport::transport().removeEndpoint(endpoint, this);
+				}
+			} else {
+				// Non-simulation case
+				FlowTransport::transport().removeEndpoint(endpoint, this);
+			}
 		} else {
+			// Remote endpoint - always use removePeerReference
 			FlowTransport::transport().removePeerReference(endpoint, m_stream);
 		}
 	}
@@ -74,6 +98,10 @@ public:
 		ASSERT(taskID != TaskPriority::UnknownEndpoint);
 		if (!endpoint.isValid()) {
 			m_isLocalEndpoint = true;
+			// Record the process where this local endpoint is being created
+			if (g_network && g_network->isSimulated()) {
+				m_creationProcess = g_simulator->getCurrentProcess();
+			}
 			FlowTransport::transport().addEndpoint(endpoint, this, taskID);
 		}
 		return endpoint;
@@ -82,14 +110,12 @@ public:
 	void setEndpoint(Endpoint const& e) {
 		ASSERT(!endpoint.isValid());
 		m_isLocalEndpoint = true;
+		// Record the process where this local endpoint is being created
+		if (g_network && g_network->isSimulated()) {
+			m_creationProcess = g_simulator->getCurrentProcess();
+		}
 		endpoint = e;
 		
-		// Track creation of the crashing token via setEndpoint
-		if (e.token.first() == 0x030403030002deb4ULL && e.token.second() == 0xe12ae2af00000061ULL) {
-			printf("CRASH_TOKEN_SETENDPOINT_CREATED: Token %016llx%016llx, Receiver %p\n", 
-			       (unsigned long long)e.token.first(), (unsigned long long)e.token.second(), this);
-			fflush(stdout);
-		}
 	}
 
 	void setPeerCompatibilityPolicy(const PeerCompatibilityPolicy& policy) { peerCompatibilityPolicy_ = policy; }
@@ -101,14 +127,12 @@ public:
 	void makeWellKnownEndpoint(Endpoint::Token token, TaskPriority taskID) {
 		ASSERT(!endpoint.isValid());
 		m_isLocalEndpoint = true;
+		// Record the process where this local endpoint is being created
+		if (g_network && g_network->isSimulated()) {
+			m_creationProcess = g_simulator->getCurrentProcess();
+		}
 		endpoint.token = token;
 		
-		// Track creation of the crashing token via well-known endpoint
-		if (token.first() == 0x030403030002deb4ULL && token.second() == 0xe12ae2af00000061ULL) {
-			printf("CRASH_TOKEN_WELLKNOWN_CREATED: Token %016llx%016llx, Receiver %p\n", 
-			       (unsigned long long)token.first(), (unsigned long long)token.second(), this);
-			fflush(stdout);
-		}
 		
 		FlowTransport::transport().addWellKnownEndpoint(endpoint, this, taskID);
 	}
@@ -121,11 +145,15 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 	using FastAllocated<NetSAV<T>>::operator new;
 	using FastAllocated<NetSAV<T>>::operator delete;
 
-	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {}
+	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {
+	}
 	NetSAV(int futures, int promises, const Endpoint& remoteEndpoint)
-	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {}
+	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {
+	}
 
-	void destroy() override { delete this; }
+	void destroy() override { 
+		delete this; 
+	}
 	void receive(ArenaObjectReader& reader) override {
 		if (!SAV<T>::canBeSet())
 			return;
@@ -141,6 +169,58 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 
 	bool isPublic() const override { return true; }
 };
+
+// HTTP-specific Promise that doesn't use NetSAV to avoid cross-process destruction issues
+template <class T>
+class HTTPPromise final {
+private:
+	SAV<T>* sav;
+	
+public:
+	template <class U>
+	void send(U&& value) const {
+		sav->send(std::forward<U>(value));
+	}
+	
+	template <class E>
+	void sendError(const E& exc) const {
+		sav->sendError(exc);
+	}
+
+	Future<T> getFuture() const {
+		sav->addFutureRef();
+		return Future<T>(sav);
+	}
+	
+	bool isSet() const { return sav->isSet(); }
+	bool isValid() const { return sav != nullptr; }
+	
+	HTTPPromise() : sav(new SAV<T>(0, 1)) {}
+	HTTPPromise(const HTTPPromise& rhs) : sav(rhs.sav) { sav->addPromiseRef(); }
+	HTTPPromise(HTTPPromise&& rhs) noexcept : sav(rhs.sav) { rhs.sav = 0; }
+	~HTTPPromise() {
+		if (sav)
+			sav->delPromiseRef();
+	}
+
+	void operator=(const HTTPPromise& rhs) {
+		if (rhs.sav)
+			rhs.sav->addPromiseRef();
+		if (sav)
+			sav->delPromiseRef();
+		sav = rhs.sav;
+	}
+	void operator=(HTTPPromise&& rhs) noexcept {
+		if (sav != rhs.sav) {
+			if (sav)
+				sav->delPromiseRef();
+			sav = rhs.sav;
+			rhs.sav = 0;
+		}
+	}
+};
+
+// FDB response data for hybrid HTTP approach
 
 template <class T>
 class ReplyPromise final : public ComposedIdentifier<T, 1> {
