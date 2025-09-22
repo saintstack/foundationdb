@@ -198,6 +198,13 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 		state TenantMapEntry entry;
 		state std::string uniqueHostname;
 
+		// Set flag for blobstore operations as early as possible
+		// Any client can set this flag to ensure it's set before assertions happen
+		if (self->backupURL.rfind("blobstore://", 0) == 0 && g_network->isSimulated()) {
+			g_simulator->blobstoreOperationsActive = true;
+			TraceEvent("BARW_BlobstoreDetected").detail("URL", self->backupURL).detail("ClientId", self->clientId);
+		}
+
 		// Register MockS3Server only for blobstore URLs in simulation
 		// Only client 0 registers the MockS3Server to avoid duplicates
 		if (self->clientId == 0 && self->backupURL.rfind("blobstore://", 0) == 0 &&
@@ -205,8 +212,6 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 		     self->backupURL.find("localhost") != std::string::npos) &&
 		    g_network->isSimulated()) {
 			TraceEvent("BARW_RegisterMockS3").detail("URL", self->backupURL).detail("ClientId", self->clientId);
-			// Set flag to indicate blobstore operations are active
-			g_simulator->blobstoreOperationsActive = true;
 			wait(g_simulator->registerSimHTTPServer("127.0.0.1", "8080", makeReference<MockS3RequestHandler>()));
 			TraceEvent("BARW_RegisteredMockS3").detail("Address", "127.0.0.1:8080").detail("ClientId", self->clientId);
 		}
