@@ -583,7 +583,18 @@ private:
 			// Skip process assertion for blobstore operations to avoid cross-process issues
 		// Blobstore operations (S3 backup) legitimately involve cross-process HTTP communication
 		if (!g_simulator->blobstoreOperationsActive) {
+			TraceEvent(SevError, "ProcessAssertionFailed")
+			    .detail("CurrentProcess", (void*)g_simulator->getCurrentProcess())
+			    .detail("ExpectedProcess", (void*)self->process)
+			    .detail("BlobstoreActive", g_simulator->blobstoreOperationsActive)
+			    .detail("Line", 587);
 			ASSERT(g_simulator->getCurrentProcess() == self->process);
+		} else {
+			TraceEvent("ProcessAssertionSkipped")
+			    .detail("CurrentProcess", (void*)g_simulator->getCurrentProcess())
+			    .detail("ExpectedProcess", (void*)self->process)
+			    .detail("BlobstoreActive", g_simulator->blobstoreOperationsActive)
+			    .detail("Line", 587);
 		}
 			throw;
 		}
