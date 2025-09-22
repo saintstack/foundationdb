@@ -1,5 +1,9 @@
 testClass = "Backup"
 
+[configuration]
+buggify = false
+faultInjection = false
+
 [[test]]
 testTitle = 'BackupAndRestoreS3'
 clearAfterTest = false
