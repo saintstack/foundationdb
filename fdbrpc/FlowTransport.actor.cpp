@@ -1168,9 +1168,18 @@ ACTOR static void deliver(TransportData* self,
 		g_network->setCurrentTask(priority);
 	}
 
-	auto receiver = self->endpoints.get(destination.token);
-	if (receiver && (isTrustedPeer || receiver->isPublic())) {
-		if (!checkCompatible(receiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
+	// CRITICAL FIX: Always get fresh receiver pointer to avoid race conditions
+	// Don't cache the receiver pointer as it might become invalid due to NetSAV destruction
+	NetworkMessageReceiver* currentReceiver = self->endpoints.get(destination.token);
+	if (currentReceiver && (isTrustedPeer || currentReceiver->isPublic())) {
+		// RACE CONDITION FIX: Re-validate receiver before each method access
+		// NetSAV can be destroyed between endpoint lookup and method call
+		currentReceiver = self->endpoints.get(destination.token);
+		if (!currentReceiver) {
+			// NetSAV was destroyed between checks - drop message safely
+			return;
+		}
+		if (!checkCompatible(currentReceiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
 			return;
 		}
 		try {
@@ -1183,40 +1192,29 @@ ACTOR static void deliver(TransportData* self,
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
 			
-			// CRITICAL FIX: Validate receiver is still valid before calling receive()
-			// Check if the receiver is still registered in the endpoint map
-			NetworkMessageReceiver* currentReceiver = self->endpoints.get(destination.token);
+			// Additional validation: Re-check receiver is still valid before calling receive()
+			// This handles the case where NetSAV gets destroyed between the checks above
+			currentReceiver = self->endpoints.get(destination.token);
 
 			// CRITICAL FIX: Always use currentReceiver for the actual call, never the original receiver pointer
 			// The original receiver might point to a destroyed object due to race conditions
 			if (currentReceiver != nullptr) {
-				// ADDITIONAL SAFETY: Even if endpoint exists, validate the receiver is still the same object
-				// This catches cases where NetSAV was destroyed but endpoint map entry still exists (removePeerReference doesn't remove the entry)
-				if (currentReceiver == receiver) {
-					// FINAL SAFETY CHECK: Check if the receiver has been marked as destroyed
-					// Cast to FlowReceiver to access isDestroyed() method (NetSAVs inherit from FlowReceiver)
-					FlowReceiver* flowReceiver = dynamic_cast<FlowReceiver*>(currentReceiver);
-					if (flowReceiver && flowReceiver->isDestroyed()) {
-						// Drop message to destroyed NetSAV - prevents __cxa_pure_virtual crash
-						TraceEvent(SevInfo, "DroppedMessageToDestroyedNetSAV")
-						    .detail("Token", destination.token)
-						    .detail("Receiver", (void*)currentReceiver);
-					} else {
-						// Endpoint still exists, receiver matches, and not destroyed - safe to deliver message
-						currentReceiver->receive(objReader);
-					}
-				} else {
-					// Receiver pointer mismatch - endpoint was replaced, drop message
-					TraceEvent(SevInfo, "DroppedMessageToReplacedReceiver")
+				// FINAL SAFETY CHECK: Check if the receiver has been marked as destroyed
+				// Cast to FlowReceiver to access isDestroyed() method (NetSAVs inherit from FlowReceiver)
+				FlowReceiver* flowReceiver = dynamic_cast<FlowReceiver*>(currentReceiver);
+				if (flowReceiver && flowReceiver->isDestroyed()) {
+					// Drop message to destroyed NetSAV - prevents __cxa_pure_virtual crash
+					TraceEvent(SevInfo, "DroppedMessageToDestroyedNetSAV")
 					    .detail("Token", destination.token)
-					    .detail("ExpectedReceiver", (void*)receiver)
-					    .detail("CurrentReceiver", (void*)currentReceiver);
+					    .detail("Receiver", (void*)currentReceiver);
+				} else {
+					// Endpoint exists and not destroyed - safe to deliver message
+					currentReceiver->receive(objReader);
 				}
 			} else {
 				// Endpoint was removed - drop the message silently to prevent crash
 				TraceEvent(SevInfo, "DroppedMessageToDestroyedReceiver")
 				    .detail("Token", destination.token)
-				    .detail("ExpectedReceiver", (void*)receiver)
 				    .detail("CurrentReceiver", (void*)currentReceiver);
 			}
 			g_currentDeliveryPeerAddress = NetworkAddressList();
@@ -1242,11 +1240,11 @@ ACTOR static void deliver(TransportData* self,
 		}
 	} else if (destination.token.first() & TOKEN_STREAM_FLAG) {
 		// We don't have the (stream) endpoint 'token', notify the remote machine
-		if (receiver) {
-			TraceEvent(SevWarnAlways, "AttemptedRPCToPrivatePrevented"_audit)
-			    .detail("From", peerAddress)
-			    .detail("Token", destination.token)
-			    .detail("Receiver", typeid(*receiver).name());
+	if (currentReceiver) {
+		TraceEvent(SevWarnAlways, "AttemptedRPCToPrivatePrevented"_audit)
+		    .detail("From", peerAddress)
+		    .detail("Token", destination.token)
+		    .detail("Receiver", typeid(*currentReceiver).name());
 			ASSERT(!self->isLocalAddress(destination.getPrimaryAddress()));
 			Reference<Peer> peer = self->getOrOpenPeer(destination.getPrimaryAddress());
 			sendPacket(self,
