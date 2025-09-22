@@ -800,19 +800,6 @@ Future<Void> S3BlobStoreEndpoint::updateSecret() {
 
 ACTOR Future<S3BlobStoreEndpoint::ReusableConnection> connect_impl(Reference<S3BlobStoreEndpoint> b,
                                                                    bool* reusingConn) {
-	// Abort immediately if cluster recovery is in progress (with 5 second timeout)
-	if (g_abortS3Connections.load()) {
-		double abortTime = g_abortS3ConnectionsTime.load();
-		if (now() - abortTime < 5.0) {
-			TraceEvent("S3ConnectionAborted").detail("Host", b->host).detail("AbortAge", now() - abortTime);
-			throw connection_failed();
-		} else {
-			// Auto-reset after 5 seconds
-			g_abortS3Connections.store(false);
-			TraceEvent("S3ConnectionAbortAutoReset").detail("Host", b->host);
-		}
-	}
-	
 	// First try to get a connection from the pool
 	*reusingConn = false;
 	while (!b->connectionPool->pool.empty()) {
@@ -895,30 +882,6 @@ void S3BlobStoreEndpoint::returnConnection(ReusableConnection& rconn) {
 	rconn.conn = Reference<IConnection>();
 }
 
-// Global flag to abort S3 connections during cluster recovery
-std::atomic<bool> g_abortS3Connections{false};
-std::atomic<double> g_abortS3ConnectionsTime{0.0};
-
-// Abort all active S3 connections during cluster recovery to prevent endpoint race conditions
-void S3BlobStoreEndpoint::abortAllS3Connections() {
-	TraceEvent("S3ConnectionAbortStart").log();
-	g_abortS3Connections.store(true);
-	g_abortS3ConnectionsTime.store(now());
-	
-	// Clear all connection pools to force immediate disconnection
-	for (auto& poolEntry : S3BlobStoreEndpoint::globalConnectionPool) {
-		auto& pool = poolEntry.second->pool;
-		while (!pool.empty()) {
-			// Just clear the connection reference without calling close()
-			// The connection will be destroyed when the reference count drops to zero
-			pool.pop();
-		}
-	}
-	
-	TraceEvent("S3ConnectionAbortComplete").detail("PoolsCleared", S3BlobStoreEndpoint::globalConnectionPool.size());
-	
-	// Auto-reset will happen in connect_impl() after 5 seconds
-}
 
 
 std::string awsCanonicalURI(const std::string& resource, std::vector<std::string>& queryParameters, bool isV4) {

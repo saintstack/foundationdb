@@ -444,11 +444,4 @@ public:
 	                           std::string const& object,
 	                           std::map<std::string, std::string> const& tags);
 	Future<std::map<std::string, std::string>> getObjectTags(std::string const& bucket, std::string const& object);
-
-	// Abort all active S3 connections during cluster recovery to prevent endpoint race conditions
-	static void abortAllS3Connections();
 };
-
-// Global flags for S3 connection abort functionality
-extern std::atomic<bool> g_abortS3Connections;
-extern std::atomic<double> g_abortS3ConnectionsTime;
