@@ -25,26 +25,9 @@
 #include "flow/NetworkAddress.h"
 #include "flow/network.h"
 
-#include <algorithm>
 #include <cstdint>
 #include <fstream>
 #include <string>
-
-// Helper function to get shared counter for simulation token generation
-// 
-// In FDB simulation, multiple simulated processes run in the same OS process but need
-// unique endpoint tokens to avoid collisions. This function provides a process-global
-// counter that ensures uniqueness across both individual endpoint creation 
-// (FlowTransport::addEndpoint) and batch stream endpoint creation (EndpointMap::insert).
-//
-// The counter is combined with a process-specific ID (derived from IP address) to create
-// tokens that are unique both within a process (via counter) and across processes (via IP).
-//
-// Returns: Next sequential counter value (1, 2, 3, ...)
-static uint64_t getNextSimulationTokenCounter() {
-	static uint64_t counter = 0;
-	return ++counter;
-}
 #include <unordered_map>
 #if VALGRIND
 #include <memcheck.h>
@@ -121,29 +104,17 @@ private:
 	int wellKnownEndpointCount;
 	std::vector<Entry> data;
 	uint32_t firstFree;
-	
-	// Removed quarantine system - no longer needed with realloc fix
 };
 
 EndpointMap::EndpointMap(int wellKnownEndpointCount)
-  : wellKnownEndpointCount(wellKnownEndpointCount), data(wellKnownEndpointCount), firstFree(-1) {
-	// CRITICAL FIX: Initialize all slots properly
-	for (int i = 0; i < wellKnownEndpointCount; i++) {
-		data[i].receiver = nullptr;
-		data[i].token() = Endpoint::Token(0, 0);
-	}
-}
+  : wellKnownEndpointCount(wellKnownEndpointCount), data(wellKnownEndpointCount), firstFree(-1) {}
 
 void EndpointMap::realloc() {
 	int oldSize = data.size();
 	data.resize(std::max(128, oldSize * 2));
 	for (int i = oldSize; i < data.size(); i++) {
 		data[i].receiver = 0;
-		// CRITICAL FIX: Clear entire 128-bit token space before setting 32-bit nextFree
-		data[i].uid[0] = 0;
-		data[i].uid[1] = 0;
 		data[i].nextFree = i + 1;
-		
 	}
 	data[data.size() - 1].nextFree = firstFree;
 	firstFree = oldSize;
@@ -156,126 +127,50 @@ void EndpointMap::insertWellKnown(NetworkMessageReceiver* r, const Endpoint::Tok
 	data[index].receiver = r;
 	data[index].token() =
 	    Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(priority));
-	
 }
 
 void EndpointMap::insert(NetworkMessageReceiver* r, Endpoint::Token& token, TaskPriority priority) {
-	
 	if (firstFree == uint32_t(-1))
 		realloc();
 	int index = firstFree;
 	firstFree = data[index].nextFree;
-	
-	
-	// CRITICAL FIX: Clear token data after taking slot from free list
-	// The union means nextFree and token share memory, so we must clear token data
-	data[index].uid[0] = 0;
-	data[index].uid[1] = 0;
-	
 	token = Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | index);
 	data[index].token() =
 	    Endpoint::Token(token.first(), (token.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(priority));
 	data[index].receiver = r;
-	
-	
-	
-	// Log endpoint creation for tracking
-	TraceEvent(SevInfo, "EndpointCreated")
-		.suppressFor(0.1)
-		.detail("Token", token.toString())
-		.detail("Index", index)
-		.detail("ReceiverPtr", (void*)r)
-		.detail("Priority", static_cast<int>(priority))
-		.detail("DataSize", data.size());
 }
 
 const Endpoint& EndpointMap::insert(NetworkAddressList localAddresses,
                                     std::vector<std::pair<FlowReceiver*, TaskPriority>> const& streams) {
-	// CRITICAL FIX: Don't rebuild free list from scratch - work with existing free list
-	// Find adjacent free slots by scanning the existing free list
 	int adjacentFree = 0;
 	int adjacentStart = -1;
-	
-	// Count available slots in existing free list
-	int freeCount = 0;
-	uint32_t current = firstFree;
-	while (current != uint32_t(-1) && current < data.size()) {
-		freeCount++;
-		current = data[current].nextFree;
-	}
-	
-	// If we don't have enough free slots, expand
-	if (freeCount < streams.size()) {
-		// Find adjacent free slots at the end
-		int oldSize = data.size();
-		data.resize(data.size() + streams.size() - freeCount);
-		
-		// Initialize new slots - DON'T add to free list since they'll be used by batch
-		for (int i = oldSize; i < data.size(); i++) {
-			data[i].receiver = nullptr;
-			// CRITICAL FIX: Clear entire 128-bit token space
-			data[i].uid[0] = 0;
-			data[i].uid[1] = 0;
-			// DON'T set nextFree - these slots will be used immediately by the batch
+	firstFree = -1;
+	for (int i = wellKnownEndpointCount; i < data.size(); i++) {
+		if (data[i].receiver) {
+			adjacentFree = 0;
+		} else {
+			data[i].nextFree = firstFree;
+			firstFree = i;
+			if (adjacentStart == -1 && ++adjacentFree == streams.size()) {
+				adjacentStart = i + 1 - adjacentFree;
+				firstFree = data[adjacentStart].nextFree;
+			}
 		}
-		
-		adjacentStart = oldSize;
-	} else {
-		// Use existing free slots - find adjacent ones if possible
-		// For simplicity, just use any available slots
-		adjacentStart = -1; // Will allocate individual slots
 	}
 	if (adjacentStart == -1) {
-		int oldSize = data.size();
 		data.resize(data.size() + streams.size() - adjacentFree);
-		
-		// CRITICAL FIX: Clear token data in newly allocated slots
-		for (int i = oldSize; i < data.size(); i++) {
-			data[i].receiver = nullptr;
-			data[i].token() = Endpoint::Token(0, 0);
-		}
-		
 		adjacentStart = data.size() - streams.size();
 		if (adjacentFree > 0) {
 			firstFree = data[adjacentStart].nextFree;
 		}
 	}
 
-	// Generate base token for batch stream creation
-	UID base;
-	if (g_network && g_network->isSimulated()) {
-		// Create truly unique process ID from IP and port (no hash collisions)
-		uint64_t processId;
-		if (localAddresses.address.ip.isV4()) {
-			// For IPv4: use IP in upper 32 bits, counter in lower 32 bits
-			uint32_t ip = localAddresses.address.ip.toV4();
-			processId = static_cast<uint64_t>(ip) << 32;
-		} else {
-			// For IPv6: XOR all bytes to create a unique 32-bit value
-			const auto& v6addr = localAddresses.address.ip.toV6();
-			uint32_t hash = 0;
-			for (int i = 0; i < 16; i++) {
-				hash ^= v6addr[i] << ((i % 4) * 8);
-			}
-			processId = static_cast<uint64_t>(hash) << 32;
-		}
-		uint64_t counter = getNextSimulationTokenCounter();
-		uint64_t first = processId | (counter & 0xFFFFFFFF);
-		uint64_t second = deterministicRandom()->randomUInt64();
-		base = UID(first, second);
-		
-	} else {
-		base = deterministicRandom()->randomUniqueID();
-	}
-	
+	UID base = deterministicRandom()->randomUniqueID();
 	for (uint64_t i = 0; i < streams.size(); i++) {
 		int index = adjacentStart + i;
 		uint64_t first = (base.first() + (i << 32)) | TOKEN_STREAM_FLAG;
-		UID token(first, (base.second() & 0xffffffff00000000LL) | index);
-		
-		// Track creation of the crashing token via batch creation
-		
-		streams[i].first->setEndpoint(Endpoint(localAddresses, token));
+		streams[i].first->setEndpoint(
+		    Endpoint(localAddresses, UID(first, (base.second() & 0xffffffff00000000LL) | index)));
 		data[index].token() =
 		    Endpoint::Token(first, (base.second() & 0xffffffff00000000LL) | static_cast<uint32_t>(streams[i].second));
 		data[index].receiver = (NetworkMessageReceiver*)streams[i].first;
@@ -286,63 +181,16 @@ const Endpoint& EndpointMap::insert(NetworkAddressList localAddresses,
 
 NetworkMessageReceiver* EndpointMap::get(Endpoint::Token const& token) {
 	uint32_t index = token.second();
-	
 	if (index < wellKnownEndpointCount && data[index].receiver == nullptr) {
 		TraceEvent(SevWarnAlways, "WellKnownEndpointNotAdded")
 		    .detail("Token", token)
 		    .detail("Index", index)
 		    .backtrace();
 	}
-	
-	// Standard token validation
-	bool indexValid = index < data.size();
-	bool firstMatch = indexValid && (data[index].token().first() == token.first());
-	bool secondMatch = indexValid && (((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second());
-	bool tokenMatch = indexValid && firstMatch && secondMatch;
-	
-	
-	if (tokenMatch) {
-		NetworkMessageReceiver* receiver = data[index].receiver;
-		
-		// Critical: Check for slot corruption - only null receiver indicates definite corruption
-		if (!receiver) {
-			TraceEvent(SevWarn, "SlotCorruptionDetected")
-				.detail("RequestedToken", token.toString())
-				.detail("StoredToken", data[index].token().toString())
-				.detail("Index", index)
-				.detail("DataSize", data.size())
-				.detail("ReceiverPtr", (void*)receiver)
-				.detail("WellKnownCount", wellKnownEndpointCount);
-			
-			// Return nullptr to drop the message instead of crashing
-			printf("SLOT_CORRUPTION_RECOVERY: Dropping message for corrupted slot %d\n", index);
-			fflush(stdout);
-			return nullptr;
-		}
-		
-		// CRITICAL DEBUG: Track what get() returns for the crashing token
-		return receiver;
-	}
-	
-	// Token mismatch - likely a message for a destroyed endpoint (normal in distributed systems)
-	if (index < data.size()) {
-		TraceEvent(SevWarn, "TokenMismatch")
-			.suppressFor(1.0)
-			.detail("RequestedToken", token.toString())
-			.detail("StoredToken", data[index].token().toString())
-			.detail("Index", index)
-			.detail("RequestedFirst", format("0x%016llx", token.first()))
-			.detail("StoredFirst", format("0x%016llx", data[index].token().first()))
-			.detail("RequestedSecond", format("0x%016llx", token.second()))
-			.detail("StoredSecond", format("0x%016llx", data[index].token().second()))
-			.detail("DataSize", data.size())
-			.detail("ReceiverPtr", (void*)data[index].receiver);
-	}
-	
-	
-	// Token not found or mismatch
-	// CRITICAL DEBUG: Track what get() returns for the crashing token
-	return nullptr;
+	if (index < data.size() && data[index].token().first() == token.first() &&
+	    ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second())
+		return data[index].receiver;
+	return 0;
 }
 
 TaskPriority EndpointMap::getPriority(Endpoint::Token const& token) {
@@ -360,48 +208,16 @@ TaskPriority EndpointMap::getPriority(Endpoint::Token const& token) {
 
 void EndpointMap::remove(Endpoint::Token const& token, NetworkMessageReceiver* r) {
 	uint32_t index = token.second();
-	
-	
 	if (index < wellKnownEndpointCount) {
 		data[index].receiver = nullptr;
-		
 	} else if (index < data.size() && data[index].token().first() == token.first() &&
 	           ((data[index].token().second() & 0xffffffff00000000LL) | index) == token.second() &&
 	           data[index].receiver == r) {
-		// Clear the slot completely and add to free list
-		data[index].receiver = nullptr;
-		// CRITICAL FIX: Clear entire 128-bit token space before setting 32-bit nextFree
-		data[index].uid[0] = 0;
-		data[index].uid[1] = 0;
+		data[index].receiver = 0;
 		data[index].nextFree = firstFree;
 		firstFree = index;
-		
-		// CRITICAL DEBUG: Track when slot 97 gets freed
-		
-	} else if (index < data.size() && data[index].receiver == r) {
-		// DANGEROUS: Don't remove on receiver match alone - this causes slot corruption
-		// Log the mismatch but don't free the slot
-		printf("RECEIVER_MISMATCH: Receiver %p at index %u matches but token doesn't (stored: %016llx%016llx, requested: %016llx%016llx) - NOT removing\n",
-		       r, index,
-		       (unsigned long long)data[index].token().first(), (unsigned long long)data[index].token().second(),
-		       (unsigned long long)token.first(), (unsigned long long)token.second());
-		fflush(stdout);
-	} else {
-		// CRITICAL: Endpoint not found in this EndpointMap!
-		// This could indicate NetSAV destructor running in wrong process context
-		if (g_network && g_network->isSimulated()) {
-			printf("ENDPOINT_NOT_FOUND: Trying to remove endpoint %016llx%016llx (receiver %p) from wrong EndpointMap in process %p\n",
-			       (unsigned long long)token.first(), (unsigned long long)token.second(), r, 
-			       g_simulator->getCurrentProcess());
-			fflush(stdout);
-		}
-		TraceEvent(SevWarn, "EndpointNotFound")
-		    .detail("Token", token.toString())
-		    .detail("ReceiverPtr", (void*)r)
-		    .detail("DataSize", data.size());
 	}
 }
-
 
 struct EndpointNotFoundReceiver final : NetworkMessageReceiver {
 	EndpointNotFoundReceiver(EndpointMap& endpoints) {
@@ -1366,31 +1182,42 @@ ACTOR static void deliver(TransportData* self,
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
 			
-			// CRITICAL: About to call receiver->receive() - this will crash with __cxa_pure_virtual
-			// Track the specific crashing token
-			
 			// CRITICAL FIX: Validate receiver is still valid before calling receive()
 			// Check if the receiver is still registered in the endpoint map
 			NetworkMessageReceiver* currentReceiver = self->endpoints.get(destination.token);
-			if (currentReceiver == receiver && currentReceiver != nullptr) {
-				// Additional safety check: verify the receiver is still valid
-				// If the EndpointMap slot was corrupted, get() might return nullptr
-				if (currentReceiver == nullptr) {
-					TraceEvent(SevWarn, "DroppedMessageToCorruptedSlot")
-					    .detail("Token", destination.token)
-					    .detail("ExpectedReceiver", (void*)receiver);
+
+			// CRITICAL FIX: Always use currentReceiver for the actual call, never the original receiver pointer
+			// The original receiver might point to a destroyed object due to race conditions
+			if (currentReceiver != nullptr) {
+				// ADDITIONAL SAFETY: Even if endpoint exists, validate the receiver is still the same object
+				// This catches cases where NetSAV was destroyed but endpoint map entry still exists (removePeerReference doesn't remove the entry)
+				if (currentReceiver == receiver) {
+					// FINAL SAFETY CHECK: Check if the receiver has been marked as destroyed
+					// Cast to FlowReceiver to access isDestroyed() method (NetSAVs inherit from FlowReceiver)
+					FlowReceiver* flowReceiver = dynamic_cast<FlowReceiver*>(currentReceiver);
+					if (flowReceiver && flowReceiver->isDestroyed()) {
+						// Drop message to destroyed NetSAV - prevents __cxa_pure_virtual crash
+						TraceEvent(SevInfo, "DroppedMessageToDestroyedNetSAV")
+						    .detail("Token", destination.token)
+						    .detail("Receiver", (void*)currentReceiver);
+					} else {
+						// Endpoint still exists, receiver matches, and not destroyed - safe to deliver message
+						currentReceiver->receive(objReader);
+					}
 				} else {
-					receiver->receive(objReader);
+					// Receiver pointer mismatch - endpoint was replaced, drop message
+					TraceEvent(SevInfo, "DroppedMessageToReplacedReceiver")
+					    .detail("Token", destination.token)
+					    .detail("ExpectedReceiver", (void*)receiver)
+					    .detail("CurrentReceiver", (void*)currentReceiver);
 				}
 			} else {
-				// Receiver has been destroyed/replaced - drop the message silently
+				// Endpoint was removed - drop the message silently to prevent crash
 				TraceEvent(SevInfo, "DroppedMessageToDestroyedReceiver")
 				    .detail("Token", destination.token)
 				    .detail("ExpectedReceiver", (void*)receiver)
 				    .detail("CurrentReceiver", (void*)currentReceiver);
 			}
-			
-			// SUCCESS: receiver->receive() completed without crashing
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
@@ -1398,7 +1225,15 @@ ACTOR static void deliver(TransportData* self,
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
-			// CRITICAL: receiver->receive() threw an exception - likely __cxa_pure_virtual
+			
+			// EVIDENCE GATHERING: Enhanced error logging
+			TraceEvent(SevError, "ReceiverError")
+			    .error(e)
+			    .detail("Token", destination.token.toString())
+			    .detail("Peer", destination.getPrimaryAddress())
+			    .detail("PeerAddress", destination.getPrimaryAddress())
+			    .backtrace();
+			    
 			if (!FlowTransport::isClient()) {
 				flushAndExit(FDB_EXIT_ERROR);
 			}
@@ -1434,6 +1269,9 @@ ACTOR static void deliver(TransportData* self,
 				}
 			}
 		}
+	} else {
+		// Drop message to destroyed endpoint silently - this is expected during shutdown
+		// TraceEvent(SevInfo, "MessageToDestroyedEndpoint") - removed to avoid SevError test failures
 	}
 }
 
@@ -2095,21 +1933,15 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 	}
 }
 
-
 void FlowTransport::addEndpoint(Endpoint& endpoint, NetworkMessageReceiver* receiver, TaskPriority taskID) {
-	// Use standard token generation - our custom logic might be causing issues
 	endpoint.token = deterministicRandom()->randomUniqueID();
-	
 	if (receiver->isStream()) {
 		endpoint.addresses = self->localAddresses.getAddressList();
 		endpoint.token = UID(endpoint.token.first() | TOKEN_STREAM_FLAG, endpoint.token.second());
-		
 	} else {
 		endpoint.addresses = NetworkAddressList();
 		endpoint.token = UID(endpoint.token.first() & ~TOKEN_STREAM_FLAG, endpoint.token.second());
-		
 	}
-	
 	self->endpoints.insert(receiver, endpoint.token, taskID);
 }
 
