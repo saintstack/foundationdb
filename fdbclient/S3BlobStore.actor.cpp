@@ -1197,7 +1197,11 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 					    rconn.conn, dryrunRequest, bstore->sendRate, &bstore->s_stats.bytes_sent, bstore->recvRate);
 					Reference<HTTP::IncomingResponse> _dryrunR = wait(timeoutError(dryrunResponse, requestTimeout));
 					dryrunR = _dryrunR;
-					std::string s3Error = parseErrorCodeFromS3(dryrunR->data.content);
+					// Only parse S3 error code for error responses (4xx/5xx), not successful responses (2xx)
+					std::string s3Error;
+					if (dryrunR->code >= 400) {
+						s3Error = parseErrorCodeFromS3(dryrunR->data.content);
+					}
 					if (dryrunR->code == badRequestCode && isS3TokenError(s3Error)) {
 						// authentication fails and s3 token error persists, retry with a HEAD dryrun request
 						// to avoid sending duplicate data indefinitly to save network bandwidth
@@ -1320,7 +1324,11 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 
 		if (!err.present()) {
 			event.detail("ResponseCode", r->code);
-			std::string s3Error = parseErrorCodeFromS3(r->data.content);
+			// Only parse S3 error code for error responses (4xx/5xx), not successful responses (2xx)
+			std::string s3Error;
+			if (r->code >= 400) {
+				s3Error = parseErrorCodeFromS3(r->data.content);
+			}
 			event.detail("S3ErrorCode", s3Error);
 			if (r->code == badRequestCode) {
 				if (isS3TokenError(s3Error) || simulateS3TokenError) {
