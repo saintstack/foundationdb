@@ -205,6 +205,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 		     self->backupURL.find("localhost") != std::string::npos) &&
 		    g_network->isSimulated()) {
 			TraceEvent("BARW_RegisterMockS3").detail("URL", self->backupURL).detail("ClientId", self->clientId);
+			// Set flag to indicate blobstore operations are active
+			g_simulator->blobstoreOperationsActive = true;
 			wait(g_simulator->registerSimHTTPServer("127.0.0.1", "8080", makeReference<MockS3RequestHandler>()));
 			TraceEvent("BARW_RegisteredMockS3").detail("Address", "127.0.0.1:8080").detail("ClientId", self->clientId);
 		}

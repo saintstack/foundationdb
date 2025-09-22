@@ -363,6 +363,7 @@ public:
 	bool setDiffProtocol; // true if a process with a different protocol version has been started
 
 	bool allowStorageMigrationTypeChange = false;
+	bool blobstoreOperationsActive = false; // Set to true when any workload uses blobstore:// URLs
 	double injectTargetedSSRestartTime = std::numeric_limits<double>::max();
 	double injectSSDelayTime = std::numeric_limits<double>::max();
 	double injectTargetedBMRestartTime = std::numeric_limits<double>::max();
