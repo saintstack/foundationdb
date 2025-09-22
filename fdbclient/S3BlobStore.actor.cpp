@@ -1324,9 +1324,10 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 
 		if (!err.present()) {
 			event.detail("ResponseCode", r->code);
-			// Only parse S3 error code for error responses (4xx/5xx), not successful responses (2xx)
+			// Only parse S3 error code for real error responses (4xx/5xx), not successful responses (2xx)
+			// Skip parsing for simulated errors where response content is still binary data
 			std::string s3Error;
-			if (r->code >= 400) {
+			if (r->code >= 400 && !simulateS3TokenError) {
 				s3Error = parseErrorCodeFromS3(r->data.content);
 			}
 			event.detail("S3ErrorCode", s3Error);
