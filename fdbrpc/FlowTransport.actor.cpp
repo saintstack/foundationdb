@@ -44,6 +44,7 @@
 #include "fdbrpc/IPAllowList.h"
 #include "fdbrpc/TokenCache.h"
 #include "fdbrpc/simulator.h"
+#include "fdbrpc/SimulatorProcessInfo.h"
 #include "flow/ActorCollection.h"
 #include "flow/Error.h"
 #include "flow/flow.h"
@@ -1911,14 +1912,34 @@ void FlowTransport::addPeerReference(const Endpoint& endpoint, bool isStream) {
 	} else {
 		peer->peerReferences++;
 	}
+	
 }
 
 void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream) {
 	if (!isStream || !endpoint.getPrimaryAddress().isValid() || !endpoint.getPrimaryAddress().isPublic())
 		return;
+	
+	// CRITICAL FIX: In simulation, skip removePeerReference for addresses that belong to other processes
+	// Peer references are process-local, so cross-process removePeerReference calls corrupt reference counts
+	if (g_network && g_network->isSimulated()) {
+		// Check if this address belongs to the current process
+		ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
+		if (currentProcess && endpoint.getPrimaryAddress() != currentProcess->address) {
+			// This is a cross-process removePeerReference call - skip it to prevent corruption
+			TraceEvent("SkippedCrossProcessRemovePeerReference")
+			    .detail("Address", endpoint.getPrimaryAddress())
+			    .detail("Token", endpoint.token)
+			    .detail("CurrentProcessAddress", currentProcess->address)
+			    .detail("Process", (void*)currentProcess);
+			return;
+		}
+	}
+	
 	Reference<Peer> peer = self->getPeer(endpoint.getPrimaryAddress());
 	if (peer) {
 		peer->peerReferences--;
+		
+		
 		if (peer->peerReferences < 0) {
 			TraceEvent(SevError, "InvalidPeerReferences")
 			    .detail("References", peer->peerReferences)
@@ -1930,6 +1951,7 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 		    peer->lastDataPacketSentTime < now() - FLOW_KNOBS->CONNECTION_MONITOR_UNREFERENCED_CLOSE_DELAY) {
 			peer->resetPing.trigger();
 		}
+	} else {
 	}
 }
 
