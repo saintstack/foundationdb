@@ -44,7 +44,6 @@
 #include "fdbrpc/IPAllowList.h"
 #include "fdbrpc/TokenCache.h"
 #include "fdbrpc/simulator.h"
-#include "fdbrpc/SimulatorProcessInfo.h"
 #include "flow/ActorCollection.h"
 #include "flow/Error.h"
 #include "flow/flow.h"
@@ -1168,18 +1167,9 @@ ACTOR static void deliver(TransportData* self,
 		g_network->setCurrentTask(priority);
 	}
 
-	// CRITICAL FIX: Always get fresh receiver pointer to avoid race conditions
-	// Don't cache the receiver pointer as it might become invalid due to NetSAV destruction
-	NetworkMessageReceiver* currentReceiver = self->endpoints.get(destination.token);
-	if (currentReceiver && (isTrustedPeer || currentReceiver->isPublic())) {
-		// RACE CONDITION FIX: Re-validate receiver before each method access
-		// NetSAV can be destroyed between endpoint lookup and method call
-		currentReceiver = self->endpoints.get(destination.token);
-		if (!currentReceiver) {
-			// NetSAV was destroyed between checks - drop message safely
-			return;
-		}
-		if (!checkCompatible(currentReceiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
+	auto receiver = self->endpoints.get(destination.token);
+	if (receiver && (isTrustedPeer || receiver->isPublic())) {
+		if (!checkCompatible(receiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
 			return;
 		}
 		try {
@@ -1191,32 +1181,7 @@ ACTOR static void deliver(TransportData* self,
 			StringRef data = reader.arenaReadAll();
 			ASSERT(data.size() > 8);
 			ArenaObjectReader objReader(reader.arena(), reader.arenaReadAll(), AssumeVersion(reader.protocolVersion()));
-			
-			// Additional validation: Re-check receiver is still valid before calling receive()
-			// This handles the case where NetSAV gets destroyed between the checks above
-			currentReceiver = self->endpoints.get(destination.token);
-
-			// CRITICAL FIX: Always use currentReceiver for the actual call, never the original receiver pointer
-			// The original receiver might point to a destroyed object due to race conditions
-			if (currentReceiver != nullptr) {
-				// FINAL SAFETY CHECK: Check if the receiver has been marked as destroyed
-				// Cast to FlowReceiver to access isDestroyed() method (NetSAVs inherit from FlowReceiver)
-				FlowReceiver* flowReceiver = dynamic_cast<FlowReceiver*>(currentReceiver);
-				if (flowReceiver && flowReceiver->isDestroyed()) {
-					// Drop message to destroyed NetSAV - prevents __cxa_pure_virtual crash
-					TraceEvent(SevInfo, "DroppedMessageToDestroyedNetSAV")
-					    .detail("Token", destination.token)
-					    .detail("Receiver", (void*)currentReceiver);
-				} else {
-					// Endpoint exists and not destroyed - safe to deliver message
-					currentReceiver->receive(objReader);
-				}
-			} else {
-				// Endpoint was removed - drop the message silently to prevent crash
-				TraceEvent(SevInfo, "DroppedMessageToDestroyedReceiver")
-				    .detail("Token", destination.token)
-				    .detail("CurrentReceiver", (void*)currentReceiver);
-			}
+			receiver->receive(objReader);
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
@@ -1224,15 +1189,11 @@ ACTOR static void deliver(TransportData* self,
 			g_currentDeliveryPeerAddress = NetworkAddressList();
 			g_currentDeliverPeerAddressTrusted = false;
 			g_currentDeliveryPeerDisconnect = Future<Void>();
-			
-			// EVIDENCE GATHERING: Enhanced error logging
 			TraceEvent(SevError, "ReceiverError")
 			    .error(e)
 			    .detail("Token", destination.token.toString())
 			    .detail("Peer", destination.getPrimaryAddress())
-			    .detail("PeerAddress", destination.getPrimaryAddress())
-			    .backtrace();
-			    
+			    .detail("PeerAddress", destination.getPrimaryAddress());
 			if (!FlowTransport::isClient()) {
 				flushAndExit(FDB_EXIT_ERROR);
 			}
@@ -1240,11 +1201,11 @@ ACTOR static void deliver(TransportData* self,
 		}
 	} else if (destination.token.first() & TOKEN_STREAM_FLAG) {
 		// We don't have the (stream) endpoint 'token', notify the remote machine
-	if (currentReceiver) {
-		TraceEvent(SevWarnAlways, "AttemptedRPCToPrivatePrevented"_audit)
-		    .detail("From", peerAddress)
-		    .detail("Token", destination.token)
-		    .detail("Receiver", typeid(*currentReceiver).name());
+		if (receiver) {
+			TraceEvent(SevWarnAlways, "AttemptedRPCToPrivatePrevented"_audit)
+			    .detail("From", peerAddress)
+			    .detail("Token", destination.token)
+			    .detail("Receiver", typeid(*receiver).name());
 			ASSERT(!self->isLocalAddress(destination.getPrimaryAddress()));
 			Reference<Peer> peer = self->getOrOpenPeer(destination.getPrimaryAddress());
 			sendPacket(self,
@@ -1268,9 +1229,6 @@ ACTOR static void deliver(TransportData* self,
 				}
 			}
 		}
-	} else {
-		// Drop message to destroyed endpoint silently - this is expected during shutdown
-		// TraceEvent(SevInfo, "MessageToDestroyedEndpoint") - removed to avoid SevError test failures
 	}
 }
 
@@ -1910,34 +1868,14 @@ void FlowTransport::addPeerReference(const Endpoint& endpoint, bool isStream) {
 	} else {
 		peer->peerReferences++;
 	}
-	
 }
 
 void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream) {
 	if (!isStream || !endpoint.getPrimaryAddress().isValid() || !endpoint.getPrimaryAddress().isPublic())
 		return;
-	
-	// CRITICAL FIX: In simulation, skip removePeerReference for addresses that belong to other processes
-	// Peer references are process-local, so cross-process removePeerReference calls corrupt reference counts
-	if (g_network && g_network->isSimulated()) {
-		// Check if this address belongs to the current process
-		ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
-		if (currentProcess && endpoint.getPrimaryAddress() != currentProcess->address) {
-			// This is a cross-process removePeerReference call - skip it to prevent corruption
-			TraceEvent("SkippedCrossProcessRemovePeerReference")
-			    .detail("Address", endpoint.getPrimaryAddress())
-			    .detail("Token", endpoint.token)
-			    .detail("CurrentProcessAddress", currentProcess->address)
-			    .detail("Process", (void*)currentProcess);
-			return;
-		}
-	}
-	
 	Reference<Peer> peer = self->getPeer(endpoint.getPrimaryAddress());
 	if (peer) {
 		peer->peerReferences--;
-		
-		
 		if (peer->peerReferences < 0) {
 			TraceEvent(SevError, "InvalidPeerReferences")
 			    .detail("References", peer->peerReferences)
@@ -1949,7 +1887,6 @@ void FlowTransport::removePeerReference(const Endpoint& endpoint, bool isStream)
 		    peer->lastDataPacketSentTime < now() - FLOW_KNOBS->CONNECTION_MONITOR_UNREFERENCED_CLOSE_DELAY) {
 			peer->resetPing.trigger();
 		}
-	} else {
 	}
 }
 

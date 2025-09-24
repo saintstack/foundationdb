@@ -36,57 +36,22 @@
 // Common endpoint code for NetSAV<> and NetNotifiedQueue<>
 class FlowReceiver : public NetworkMessageReceiver, public NonCopyable {
 	Optional<PeerCompatibilityPolicy> peerCompatibilityPolicy_;
-
-protected:
 	Endpoint endpoint;
 	bool m_isLocalEndpoint;
 	bool m_stream;
-	ISimulator::ProcessInfo* m_creationProcess; // Track where this NetSAV was created
-	bool m_isNetSAV; // Track if this is a NetSAV (vs AcknowledgementReceiver)
-	bool m_cleanupDone; // Track if cleanup has already been done to prevent double cleanup
-	bool m_isDestroyed; // Track if NetSAV is being destroyed to prevent message delivery
-	bool m_addedPeerReference; // Track if we called addPeerReference() to match with removePeerReference()
 
-	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false), m_isNetSAV(false), m_creationProcess(nullptr), m_cleanupDone(false), m_isDestroyed(false), m_addedPeerReference(false) {}
+protected:
+	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false) {}
 
 	FlowReceiver(Endpoint const& remoteEndpoint, bool stream)
-	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream), m_isNetSAV(false), m_creationProcess(nullptr), m_cleanupDone(false), m_isDestroyed(false), m_addedPeerReference(true) {
+	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream) {
 		FlowTransport::transport().addPeerReference(endpoint, m_stream);
 	}
 
 	~FlowReceiver() {
-		// Skip cleanup if it was already done in destroy()
-		if (m_cleanupDone) {
-			return;
-		}
-		
-		// Get current process for cross-process detection
-		ISimulator::ProcessInfo* currentProcess = nullptr;
-		if (g_network && g_network->isSimulated()) {
-			currentProcess = g_simulator->getCurrentProcess();
-		}
-		
-		// UNIFIED CROSS-PROCESS CHECK: Skip ALL cleanup if NetSAV destroyed in different process
-		if (g_network && g_network->isSimulated() && m_creationProcess && currentProcess != m_creationProcess) {
-			// CROSS-PROCESS DESTRUCTION DETECTED
-			// DO NOT attempt any cleanup - peer references are process-local
-			// Attempting cross-process cleanup corrupts reference counts
-			TraceEvent(SevInfo, "CrossProcessNetSAVDestruction")
-			    .detail("Token", endpoint.token)
-			    .detail("CreationProcess", (void*)m_creationProcess)
-			    .detail("CurrentProcess", (void*)currentProcess)
-			    .detail("IsLocal", m_isLocalEndpoint)
-			    .detail("AddedPeerRef", m_addedPeerReference)
-			    .detail("Action", "SkipAllCleanup");
-			// Skip all cleanup - let original process handle its own references
-			return;
-		}
-		
-		// NORMAL CLEANUP: Same process or no creation process recorded
 		if (m_isLocalEndpoint) {
 			FlowTransport::transport().removeEndpoint(endpoint, this);
-		} else if (m_addedPeerReference) {
-			// Remote endpoint - only call removePeerReference if we actually added one
+		} else {
 			FlowTransport::transport().removePeerReference(endpoint, m_stream);
 		}
 	}
@@ -101,7 +66,6 @@ public:
 		endpoint = remoteEndpoint;
 		m_stream = stream;
 		FlowTransport::transport().addPeerReference(endpoint, m_stream);
-		m_addedPeerReference = true;
 	}
 
 	// If already a remote endpoint, returns that.  Otherwise makes this
@@ -135,9 +99,6 @@ public:
 	}
 
 	const Endpoint& getRawEndpoint() { return endpoint; }
-
-	// Check if this receiver has been marked as destroyed (for NetSAVs)
-	bool isDestroyed() const { return m_isDestroyed; }
 };
 
 template <class T>
@@ -145,66 +106,11 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 	using FastAllocated<NetSAV<T>>::operator new;
 	using FastAllocated<NetSAV<T>>::operator delete;
 
-	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {
-		m_isNetSAV = true;
-		if (g_network && g_network->isSimulated()) {
-			m_creationProcess = g_simulator->getCurrentProcess();
-		}
-	}
+	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {}
 	NetSAV(int futures, int promises, const Endpoint& remoteEndpoint)
-	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {
-		m_isNetSAV = true;
-		if (g_network && g_network->isSimulated()) {
-			m_creationProcess = g_simulator->getCurrentProcess();
-		}
-	}
+	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {}
 
-	void destroy() override {
-		// CRITICAL: This method is called by actor compiler when no futures are waiting
-		// We MUST do FlowReceiver cleanup before calling delete this
-		// Mark as destroyed to prevent message delivery
-		m_isDestroyed = true;
-
-		// Get current process for cross-process detection
-		ISimulator::ProcessInfo* currentProcess = nullptr;
-		if (g_network && g_network->isSimulated()) {
-			currentProcess = g_simulator->getCurrentProcess();
-		}
-
-		// UNIFIED CROSS-PROCESS CHECK: Skip ALL cleanup if NetSAV destroyed in different process
-		if (g_network && g_network->isSimulated() && m_creationProcess && currentProcess != m_creationProcess) {
-			// CROSS-PROCESS DESTRUCTION DETECTED
-			// DO NOT attempt any cleanup - peer references are process-local
-			// Attempting cross-process cleanup corrupts reference counts
-			TraceEvent(SevInfo, "CrossProcessNetSAVDestruction")
-			    .detail("Token", endpoint.token)
-			    .detail("CreationProcess", (void*)m_creationProcess)
-			    .detail("CurrentProcess", (void*)currentProcess)
-			    .detail("IsLocal", m_isLocalEndpoint)
-			    .detail("AddedPeerRef", m_addedPeerReference)
-			    .detail("Action", "SkipAllCleanupInDestroy");
-			// Skip all cleanup - let original process handle its own references
-			// Mark cleanup as done to prevent double cleanup in ~FlowReceiver()
-			m_cleanupDone = true;
-			delete this;
-			return;
-		}
-		
-		// NORMAL CLEANUP: Same process or no creation process recorded
-		// Do FlowReceiver cleanup manually since we're bypassing the destructor
-		if (m_isLocalEndpoint) {
-			FlowTransport::transport().removeEndpoint(endpoint, this);
-		} else if (m_addedPeerReference && endpoint.isValid()) {
-			// Remote endpoint - only call removePeerReference if we actually added one
-			FlowTransport::transport().removePeerReference(endpoint, m_stream);
-		}
-		// If endpoint is not valid, no cleanup needed
-
-		// Mark cleanup as done to prevent double cleanup in ~FlowReceiver()
-		m_cleanupDone = true;
-
-		delete this;
-	}
+	void destroy() override { delete this; }
 	void receive(ArenaObjectReader& reader) override {
 		if (!SAV<T>::canBeSet())
 			return;
