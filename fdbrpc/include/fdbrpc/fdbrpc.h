@@ -49,6 +49,17 @@ protected:
 	}
 
 	~FlowReceiver() {
+		// DEBUG: Log destructor calls to understand cross-process impact
+		if (g_network && g_network->isSimulated() && 
+		    endpoint.getPrimaryAddress().toString() == "2.0.2.0:2") {
+			ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
+			TraceEvent(SevWarn, "DDFlowReceiverDestroy")
+			    .detail("Token", endpoint.token)
+			    .detail("CurrentProcess", (void*)currentProcess)
+			    .detail("ThisPtr", (void*)this)
+			    .detail("IsLocal", m_isLocalEndpoint);
+		}
+		
 		if (m_isLocalEndpoint) {
 			FlowTransport::transport().removeEndpoint(endpoint, this);
 		} else {
@@ -110,7 +121,16 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 	NetSAV(int futures, int promises, const Endpoint& remoteEndpoint)
 	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {}
 
-	void destroy() override { delete this; }
+	void destroy() override { 
+		// DEBUG: Log only DataDistributor NetSAV destruction
+		if (g_network && g_network->isSimulated() && 
+		    getRawEndpoint().getPrimaryAddress().toString() == "2.0.2.0:2") {
+			TraceEvent(SevWarn, "DDNetSAVDestroy")
+			    .detail("Token", getRawEndpoint().token)
+			    .detail("ThisPtr", (void*)this);
+		}
+		delete this; 
+	}
 	void receive(ArenaObjectReader& reader) override {
 		if (!SAV<T>::canBeSet())
 			return;

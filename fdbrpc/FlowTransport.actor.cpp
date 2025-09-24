@@ -1169,6 +1169,16 @@ ACTOR static void deliver(TransportData* self,
 
 	auto receiver = self->endpoints.get(destination.token);
 	if (receiver && (isTrustedPeer || receiver->isPublic())) {
+		// DEBUG: Log all delivery attempts to understand which process crashes
+		if (g_network && g_network->isSimulated()) {
+			ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
+			TraceEvent(SevWarn, "DeliverAttempt")
+			    .detail("Token", destination.token)
+			    .detail("DestAddr", destination.getPrimaryAddress())
+			    .detail("ReceiverPtr", (void*)receiver)
+			    .detail("CurrentProcess", (void*)currentProcess);
+		}
+		
 		if (!checkCompatible(receiver->peerCompatibilityPolicy(), reader.protocolVersion())) {
 			return;
 		}
@@ -1907,6 +1917,13 @@ void FlowTransport::addEndpoints(std::vector<std::pair<FlowReceiver*, TaskPriori
 }
 
 void FlowTransport::removeEndpoint(const Endpoint& endpoint, NetworkMessageReceiver* receiver) {
+	// DEBUG: Log only DataDistributor endpoint removal
+	if (g_network && g_network->isSimulated() && 
+	    endpoint.getPrimaryAddress().toString() == "2.0.2.0:2") {
+		TraceEvent(SevWarn, "DDEndpointRemoval")
+		    .detail("Token", endpoint.token)
+		    .detail("ReceiverPtr", (void*)receiver);
+	}
 	self->endpoints.remove(endpoint.token, receiver);
 }
 
