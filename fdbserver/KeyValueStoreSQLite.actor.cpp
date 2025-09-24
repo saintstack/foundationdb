@@ -1424,8 +1424,8 @@ int SQLiteDB::checkAllPageChecksums() {
 	    .detail("ReadErrors", readErrors)
 	    .detail("TotalErrors", totalErrors);
 
-	ASSERT(!vfsAsyncIsOpen(apath));
-	ASSERT(!vfsAsyncIsOpen(walpath));
+	ASSERT(!vfsAsyncIsOpen(filename));
+	ASSERT(!vfsAsyncIsOpen(filename + "-wal"));
 
 	return totalErrors;
 }
@@ -1560,7 +1560,7 @@ void SQLiteDB::open(bool writable) {
 	    .detail("Elapsed", DEBUG_DETERMINISM ? 0 : timer() - startT)
 	    .detail("Filename", filename)
 	    .detail("Writable", writable);
-	ASSERT(vfsAsyncIsOpen(apath));
+	ASSERT(vfsAsyncIsOpen(filename));
 }
 
 void SQLiteDB::createFromScratch() {

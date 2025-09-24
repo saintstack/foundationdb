@@ -184,20 +184,15 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 						Optional<Value> v = wait(tr.get(self->key(r)));
 						if (!v.present()) {
 							self->badRead("KeyR", r, tr);
-							continue; // Skip this iteration and retry
 						}
 						state int r2 = self->fromValue(v.get());
 						Optional<Value> v2 = wait(tr.get(self->key(r2)));
-						if (!v2.present()) {
+						if (!v2.present())
 							self->badRead("KeyR2", r2, tr);
-							continue; // Skip this iteration and retry
-						}
 						state int r3 = self->fromValue(v2.get());
 						Optional<Value> v3 = wait(tr.get(self->key(r3)));
-						if (!v3.present()) {
+						if (!v3.present())
 							self->badRead("KeyR3", r3, tr);
-							continue; // Skip this iteration and retry
-						}
 						state int r4 = self->fromValue(v3.get());
 
 						// Single key clear range op will be converted to point delete inside storage engine. Generating
@@ -221,14 +216,6 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 						// 	.log();
 						break;
 					} catch (Error& e) {
-						// Handle tenant cleanup gracefully - if tenant is deleted during test cleanup, exit gracefully
-						if (e.code() == error_code_tenant_not_found) {
-							TraceEvent(SevInfo, "CycleClientTenantCleanedUp")
-							    .detail("Reason", "Tenant was cleaned up during test shutdown, exiting client")
-							    .detail("ErrorCode", e.code())
-							    .detail("ErrorDescription", e.what());
-							return Void(); // Exit the client gracefully
-						}
 						if (e.code() == error_code_transaction_too_old)
 							++self->tooOldRetries;
 						else if (e.code() == error_code_not_committed)
@@ -241,14 +228,6 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 				self->totalLatency += now() - tstart;
 			}
 		} catch (Error& e) {
-			// Handle tenant cleanup gracefully - if tenant is deleted during test cleanup, exit gracefully
-			if (e.code() == error_code_tenant_not_found) {
-				TraceEvent(SevInfo, "CycleClientTenantCleanedUpOuter")
-				    .detail("Reason", "Tenant was cleaned up during test shutdown, exiting client (outer catch)")
-				    .detail("ErrorCode", e.code())
-				    .detail("ErrorDescription", e.what());
-				return Void(); // Exit the client gracefully
-			}
 			TraceEvent(SevError, "CycleClient").error(e);
 			throw;
 		}
@@ -269,20 +248,17 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 	bool cycleCheckData(const VectorRef<KeyValueRef>& data, Version v) {
 		if (data.size() != nodeCount) {
 			logTestData(data);
-			// During test cleanup, node count changes are common due to cluster reconfiguration
-			// Log as warning instead of error to avoid test failures during cleanup
-			TraceEvent(SevWarnAlways, "CycleNodeCountChanged")
-			    .detail("Reason", "Node count changed during test cleanup")
+			TraceEvent(SevError, "TestFailure")
+			    .detail("Reason", "Node count changed")
 			    .detail("Before", nodeCount)
 			    .detail("After", data.size())
 			    .detail("Version", v)
 			    .detail("KeyPrefix", keyPrefix.printable());
-			TraceEvent(SevInfo, "CycleNodeCountInfo")
+			TraceEvent(SevError, "TestFailureInfo")
 			    .detail("DataSize", data.size())
 			    .detail("NodeCount", nodeCount)
 			    .detail("Workload", description());
-			// Return true to allow test to continue - node count changes during cleanup are acceptable
-			return true;
+			return false;
 		}
 		int i = 0;
 		int iPrev = 0;
@@ -362,14 +338,6 @@ struct CycleWorkload : TestWorkload, CycleMembers<MultiTenancy> {
 					ok = self->cycleCheckData(data, v) && ok;
 					break;
 				} catch (Error& e) {
-					// Handle tenant cleanup gracefully - if tenant is deleted during test cleanup, consider it success
-					if (e.code() == error_code_tenant_not_found) {
-						TraceEvent(SevInfo, "CycleCheckTenantCleanedUp")
-						    .detail("Reason", "Tenant was cleaned up during test shutdown, skipping check")
-						    .detail("ErrorCode", e.code())
-						    .detail("ErrorDescription", e.what());
-						break; // Exit the retry loop and return ok
-					}
 					retryCount++;
 					TraceEvent(retryCount > 20 ? SevWarnAlways : SevWarn, "CycleCheckError").error(e);
 					if (g_network->isSimulated() && retryCount > 50) {

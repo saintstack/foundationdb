@@ -42,11 +42,8 @@ struct DDBalanceWorkload : TestWorkload {
 		writesPerTransaction = getOption(options, "writesPerTransaction"_sr, 1);
 		keySpaceDriftFactor = getOption(options, "keySpaceDriftFactor"_sr, 1);
 		moversPerClient = std::max(getOption(options, "moversPerClient"_sr, 10), 1);
-		// In simulator, reduce actor and node counts to account for process switching overhead
-		int defaultActorsPerClient = g_network->isSimulated() ? 10 : 100;
-		int defaultNodes = g_network->isSimulated() ? 1000 : 10000;
-		actorsPerClient = std::max(getOption(options, "actorsPerClient"_sr, defaultActorsPerClient), 1);
-		int nodes = getOption(options, "nodes"_sr, defaultNodes);
+		actorsPerClient = std::max(getOption(options, "actorsPerClient"_sr, 100), 1);
+		int nodes = getOption(options, "nodes"_sr, 10000);
 		discardEdgeMeasurements = getOption(options, "discardEdgeMeasurements"_sr, true);
 		warmingDelay = getOption(options, "warmingDelay"_sr, 0.0);
 		transactionsPerSecond =
