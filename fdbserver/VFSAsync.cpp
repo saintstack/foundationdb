@@ -502,7 +502,7 @@ VFSAsyncFile::~VFSAsyncFile() {
 		auto itr = SharedMemoryInfo::table.find(filename);
 		if (itr != SharedMemoryInfo::table.end()) {
 			ASSERT_ABORT(itr->second.refcount == 0);
-			itr->second.cleanup(); // Fixed: cleanup() already calls table.erase()
+			itr->second.cleanup();
 		}
 	}
 }
@@ -685,7 +685,7 @@ static int asyncFullPathname(sqlite3_vfs* pVfs, /* VFS */
 ** and false otherwise.
 */
 bool vfsAsyncIsOpen(std::string filename) {
-	return SharedMemoryInfo::table.contains(filename);
+	return SharedMemoryInfo::table.contains(abspath(filename));
 }
 
 /*
