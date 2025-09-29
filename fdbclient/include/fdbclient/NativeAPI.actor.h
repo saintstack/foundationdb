@@ -104,14 +104,14 @@ public:
 	                                             Optional<TenantName> defaultTenant = Optional<TenantName>());
 
 	Database() {} // an uninitialized database can be destructed or reassigned safely; that's it
-	void operator=(Database const& rhs);
-	Database(Database const& rhs);
+	void operator=(Database const& rhs) { db = rhs.db; }
+	Database(Database const& rhs) : db(rhs.db) {}
 	Database(Database&& r) noexcept : db(std::move(r.db)) {}
 	void operator=(Database&& r) noexcept { db = std::move(r.db); }
 
 	// For internal use by the native client:
-	explicit Database(Reference<DatabaseContext> cx);
-	explicit Database(DatabaseContext* cx);
+	explicit Database(Reference<DatabaseContext> cx) : db(cx) {}
+	explicit Database(DatabaseContext* cx) : db(cx) {}
 	inline DatabaseContext* getPtr() const { return db.getPtr(); }
 	inline DatabaseContext* extractPtr() { return db.extractPtr(); }
 	DatabaseContext* operator->() const { return db.getPtr(); }

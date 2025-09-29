@@ -2002,13 +2002,8 @@ Standalone<VectorRef<KeyValueRef>> decodeMutationLogFileBlock(const Standalone<S
 	StringRefReader reader(buf, restore_corrupted_data());
 
 	// Read header, currently only decoding version BACKUP_AGENT_MLOG_VERSION
-	int32_t actualVersion = reader.consume<int32_t>();
-	if (actualVersion != BACKUP_AGENT_MLOG_VERSION) {
-		printf("BACKUP_CORRUPTION_DEBUG: Header version mismatch. Expected=%d, Actual=%d, BufferSize=%d\n",
-		       BACKUP_AGENT_MLOG_VERSION, actualVersion, buf.size());
-		fflush(stdout);
+	if (reader.consume<int32_t>() != BACKUP_AGENT_MLOG_VERSION)
 		throw restore_unsupported_file_version();
-	}
 
 	// Read k/v pairs.  Block ends either at end of last value exactly or with 0xFF as first key len byte.
 	while (1) {
@@ -2018,18 +2013,8 @@ Standalone<VectorRef<KeyValueRef>> decodeMutationLogFileBlock(const Standalone<S
 
 		// Read key and value.  If anything throws then there is a problem.
 		uint32_t kLen = reader.consumeNetworkUInt32();
-		if (kLen > 100000) { // Sanity check for corrupted length
-			printf("BACKUP_CORRUPTION_DEBUG: Suspicious key length=%u, pos=%ld, bufSize=%d\n",
-			       kLen, reader.rptr - buf.begin(), buf.size());
-			fflush(stdout);
-		}
 		const uint8_t* k = reader.consume(kLen);
 		uint32_t vLen = reader.consumeNetworkUInt32();
-		if (vLen > 100000) { // Sanity check for corrupted length
-			printf("BACKUP_CORRUPTION_DEBUG: Suspicious value length=%u, pos=%ld, bufSize=%d\n",
-			       vLen, reader.rptr - buf.begin(), buf.size());
-			fflush(stdout);
-		}
 		const uint8_t* v = reader.consume(vLen);
 
 		results.push_back(results.arena(), KeyValueRef(KeyRef(k, kLen), ValueRef(v, vLen)));

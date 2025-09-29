@@ -270,18 +270,8 @@ public:
 			return available;
 		return available_prioritized.get(priority);
 	}
-	
-	// OPTION1_FIX: Set source database connection info (replaces direct Database assignment)
-	void setSourceDatabase(Database src);
 
-	// OPTION1_FIX: Store connection info instead of shared Database to prevent cross-process sharing
-	Reference<IClusterConnectionRecord> srcConnectionRecord;
-	int srcApiVersion;
-	LocalityData srcClientLocality;
-	
-	// Get process-local Database connection to source (prevents cross-process NetSAV sharing)
-	Database getSourceDatabase() const;
-	
+	Database src;
 	Map<Key, Future<Reference<KeyRangeMap<Version>>>> key_version;
 
 	UID dbgid;
