@@ -21,6 +21,7 @@
 #include "fdbclient/TaskBucket.h"
 #include "fdbclient/FDBTypes.h"
 #include "fdbclient/ReadYourWrites.h"
+#include "fdbclient/DatabaseContext.h"  // OPTION1_FIX: Need full DatabaseContext definition
 #include "flow/actorcompiler.h" // has to be last include
 
 Reference<TaskFuture> Task::getDoneFuture(Reference<FutureBucket> fb) {
@@ -878,6 +879,27 @@ TaskBucket::TaskBucket(const Subspace& subspace,
     priority_batch(priorityBatch), lockAware(lockAware) {}
 
 TaskBucket::~TaskBucket() {}
+
+// OPTION1_FIX: Implementation of setSourceDatabase method
+void TaskBucket::setSourceDatabase(Database src) {
+	if (src.getPtr() != nullptr) {  // Check if Database is valid by checking internal pointer
+		srcConnectionRecord = src.getPtr()->getConnectionRecord();
+		srcApiVersion = src.getPtr()->apiVersion.version();
+		srcClientLocality = src.getPtr()->clientLocality;
+	} else {
+		srcConnectionRecord = Reference<IClusterConnectionRecord>();
+		srcApiVersion = 0;
+		srcClientLocality = LocalityData();
+	}
+}
+
+// OPTION1_FIX: Implementation of getSourceDatabase method
+Database TaskBucket::getSourceDatabase() const {
+	if (!srcConnectionRecord) {
+		return Database();  // Return invalid Database if no source configured
+	}
+	return Database::createDatabase(srcConnectionRecord, srcApiVersion, IsInternal::True, srcClientLocality);
+}
 
 Future<Void> TaskBucket::clear(Reference<ReadYourWritesTransaction> tr) {
 	setOptions(tr);

@@ -858,10 +858,10 @@ public:
 			destroy();
 	}
 
-	void addPromiseRef() { promises++; }
-	void addFutureRef() { futures++; }
+	virtual void addPromiseRef() { promises++; }
+	virtual void addFutureRef() { futures++; }
 
-	void delPromiseRef() {
+	virtual void delPromiseRef() {
 		if (promises == 1) {
 			if (futures && canBeSet()) {
 				sendError(broken_promise());
@@ -874,7 +874,7 @@ public:
 		} else
 			--promises;
 	}
-	void delFutureRef() {
+	virtual void delFutureRef() {
 		if (!--futures) {
 			if (promises)
 				cancel();

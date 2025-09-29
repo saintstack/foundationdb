@@ -56,7 +56,8 @@
 namespace IBackupFile_impl {
 
 ACTOR Future<Void> appendStringRefWithLen(Reference<IBackupFile> file, Standalone<StringRef> s) {
-	state uint32_t lenBuf = bigEndian32((uint32_t)s.size());
+	// CROSS_PROCESS_FIX: Don't use state variable for lenBuf to prevent cross-process corruption
+	uint32_t lenBuf = bigEndian32((uint32_t)s.size());
 	wait(file->append(&lenBuf, sizeof(lenBuf)));
 	wait(file->append(s.begin(), s.size()));
 	return Void();

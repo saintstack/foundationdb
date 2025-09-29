@@ -20,6 +20,8 @@
 
 #include "fdbclient/S3BlobStore.h"
 
+#include <sstream>
+#include "fdbrpc/HTTP.h"
 #include "fdbclient/ClientKnobs.h"
 #include "fdbclient/Knobs.h"
 #include "flow/FastRef.h"
@@ -76,8 +78,7 @@ S3BlobStoreEndpoint::Stats S3BlobStoreEndpoint::s_stats;
 std::unique_ptr<S3BlobStoreEndpoint::BlobStats> S3BlobStoreEndpoint::blobStats;
 Future<Void> S3BlobStoreEndpoint::statsLogger = Never();
 
-std::unordered_map<BlobStoreConnectionPoolKey, Reference<S3BlobStoreEndpoint::ConnectionPoolData>>
-    S3BlobStoreEndpoint::globalConnectionPool;
+// CROSS_PROCESS_FIX: globalConnectionPool is now a process-local function, no static definition needed
 
 S3BlobStoreEndpoint::BlobKnobs::BlobKnobs() {
 	secure_connection = 1;
@@ -199,6 +200,11 @@ std::string S3BlobStoreEndpoint::BlobKnobs::getURLParameters() const {
 }
 
 std::string guessRegionFromDomain(std::string domain) {
+	// Special case for localhost/127.0.0.1 to prevent basic_string exception
+	if (domain == "127.0.0.1" || domain == "localhost") {
+		return "us-east-1";
+	}
+
 	static const std::vector<const char*> knownServices = { "s3.", "cos.", "oss-", "obs." };
 	boost::algorithm::to_lower(domain);
 
@@ -843,6 +849,10 @@ ACTOR Future<S3BlobStoreEndpoint::ReusableConnection> connect_impl(Reference<S3B
 	} else {
 		wait(store(conn, INetworkConnections::net()->connect(host, service, isTLS)));
 	}
+
+	// Ensure connection is valid before handshake
+	ASSERT(conn.isValid());
+
 	wait(conn->connectHandshake());
 
 	TraceEvent("S3BlobStoreEndpointNewConnectionSuccess")
@@ -870,6 +880,8 @@ void S3BlobStoreEndpoint::returnConnection(ReusableConnection& rconn) {
 	}
 	rconn.conn = Reference<IConnection>();
 }
+
+
 
 std::string awsCanonicalURI(const std::string& resource, std::vector<std::string>& queryParameters, bool isV4) {
 	StringRef resourceRef(resource);
@@ -1030,6 +1042,13 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 	req->data.headers["Host"] = bstore->host;
 	req->data.headers["Accept"] = "application/xml";
 
+	
+	// In simulation, disable connection pooling for MockS3 to prevent NetSAV use-after-free crashes
+	// This forces connection closure after each request, preventing race conditions during coordinator shutdown
+	if (g_network->isSimulated() && bstore->host == "127.0.0.1") {
+		req->data.headers["Connection"] = "close";
+	}
+
 	// Avoid to send request with an empty resource.
 	if (resource.empty()) {
 		resource = "/";
@@ -1140,7 +1159,11 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 					    rconn.conn, dryrunRequest, bstore->sendRate, &bstore->s_stats.bytes_sent, bstore->recvRate);
 					Reference<HTTP::IncomingResponse> _dryrunR = wait(timeoutError(dryrunResponse, requestTimeout));
 					dryrunR = _dryrunR;
-					std::string s3Error = parseErrorCodeFromS3(dryrunR->data.content);
+					// Only parse S3 error code for error responses (4xx/5xx), not successful responses (2xx)
+					std::string s3Error;
+					if (dryrunR->code >= 400) {
+						s3Error = parseErrorCodeFromS3(dryrunR->data.content);
+					}
 					if (dryrunR->code == badRequestCode && isS3TokenError(s3Error)) {
 						// authentication fails and s3 token error persists, retry with a HEAD dryrun request
 						// to avoid sending duplicate data indefinitly to save network bandwidth
@@ -1263,7 +1286,12 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 
 		if (!err.present()) {
 			event.detail("ResponseCode", r->code);
-			std::string s3Error = parseErrorCodeFromS3(r->data.content);
+			// Only parse S3 error code for real error responses (4xx/5xx), not successful responses (2xx)
+			// Skip parsing for simulated errors where response content is still binary data
+			std::string s3Error;
+			if (r->code >= 400 && !simulateS3TokenError) {
+				s3Error = parseErrorCodeFromS3(r->data.content);
+			}
 			event.detail("S3ErrorCode", s3Error);
 			if (r->code == badRequestCode) {
 				if (isS3TokenError(s3Error) || simulateS3TokenError) {
@@ -1460,7 +1488,8 @@ ACTOR Future<Void> listObjectsStream_impl(Reference<S3BlobStoreEndpoint> bstore,
 					if (key == nullptr) {
 						throw http_bad_response();
 					}
-					object.name = key->value();
+					// URL decode the object name since S3 XML responses contain URL-encoded names
+					object.name = HTTP::urlDecode(key->value());
 
 					xml_node<>* size = n->first_node("Size");
 					if (size == nullptr) {

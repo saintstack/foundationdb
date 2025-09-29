@@ -294,6 +294,17 @@ public:
 		                                           defaultTenant));
 		cx->globalConfig->init(Reference<AsyncVar<ClientDBInfo> const>(cx->clientInfo),
 		                       std::addressof(cx->clientInfo->get()));
+		
+		// CROSS_PROCESS_FIX: Preserve critical version state for backup/restore operations
+		cx->minAcceptableReadVersion = minAcceptableReadVersion;
+		cx->cachedReadVersion = cachedReadVersion;
+		cx->lastGrvTime = lastGrvTime;
+		cx->lastProxyRequestTime = lastProxyRequestTime;
+		cx->lastRkBatchThrottleTime = lastRkBatchThrottleTime;
+		cx->lastRkDefaultThrottleTime = lastRkDefaultThrottleTime;
+		cx->metadataVersionCache = metadataVersionCache;
+		cx->mvCacheInsertLocation = mvCacheInsertLocation;
+		
 		return cx;
 	}
 
@@ -852,6 +863,10 @@ private:
 	double backoffDelay = 0.0;
 
 	void initializeSpecialCounters();
+
+public:
+	// CROSS_PROCESS_FIX: Track which process created this DatabaseContext to prevent cross-process destruction
+	NetworkAddress creatingProcess;
 };
 
 // Similar to tr.onError(), but doesn't require a DatabaseContext.

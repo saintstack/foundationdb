@@ -70,7 +70,8 @@ DatabaseBackupAgent::DatabaseBackupAgent(Database src)
                               PriorityBatch::False,
                               LockAware::True)),
     futureBucket(new FutureBucket(subspace.get(BackupAgentBase::keyFutures), AccessSystemKeys::True, LockAware::True)) {
-	taskBucket->src = src;
+	// OPTION1_FIX: Use new method to store connection info instead of shared Database
+	taskBucket->setSourceDatabase(src);
 }
 
 // Any new per-DR properties should go here.
@@ -219,7 +220,7 @@ struct BackupRangeTaskFunc : TaskFuncBase {
 		wait(checkTaskVersion(cx, task, BackupRangeTaskFunc::name, BackupRangeTaskFunc::version));
 		// Find out if there is a shard boundary in(beginKey, endKey)
 		Standalone<VectorRef<KeyRef>> keys =
-		    wait(runRYWTransaction(taskBucket->src, [=](Reference<ReadYourWritesTransaction> tr) {
+		wait(runRYWTransaction(taskBucket->getSourceDatabase(), [=](Reference<ReadYourWritesTransaction> tr) {
 			    return getBlockOfShards(tr,
 			                            task->params[DatabaseBackupAgent::keyBeginKey],
 			                            task->params[DatabaseBackupAgent::keyEndKey],
@@ -244,7 +245,7 @@ struct BackupRangeTaskFunc : TaskFuncBase {
 		state PromiseStream<RangeResultWithVersion> results;
 
 		state Future<Void> rc = readCommitted(
-		    taskBucket->src, results, lock, range, Terminator::True, AccessSystemKeys::True, LockAware::True);
+		    taskBucket->getSourceDatabase(), results, lock, range, Terminator::True, AccessSystemKeys::True, LockAware::True);
 		state Key rangeBegin = range.begin;
 		state Key rangeEnd;
 		state bool endOfStream = false;
@@ -557,7 +558,7 @@ struct FinishFullBackupTaskFunc : TaskFuncBase {
 		wait(checkTaskVersion(tr, task, FinishFullBackupTaskFunc::name, FinishFullBackupTaskFunc::version));
 
 		// Enable the stop key
-		Transaction srcTr(taskBucket->src);
+		Transaction srcTr(taskBucket->getSourceDatabase());
 		srcTr.setOption(FDBTransactionOptions::LOCK_AWARE);
 		Version readVersion = wait(srcTr.getReadVersion());
 		tr->set(states.pack(DatabaseBackupAgent::keyCopyStop), BinaryWriter::toValue(readVersion, Unversioned()));
@@ -638,7 +639,7 @@ struct EraseLogRangeTaskFunc : TaskFuncBase {
 
 		wait(checkTaskVersion(cx, task, EraseLogRangeTaskFunc::name, EraseLogRangeTaskFunc::version));
 
-		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		loop {
 			try {
 				Version endVersion = BinaryReader::fromStringRef<Version>(
@@ -895,7 +896,7 @@ struct CopyLogRangeTaskFunc : TaskFuncBase {
 			for (int j = results.size(); j < prefetchTo; j++) {
 				results.push_back(PromiseStream<RCGroup>());
 				locks.push_back(makeReference<FlowLock>(CLIENT_KNOBS->COPY_LOG_READ_AHEAD_BYTES));
-				rc.push_back(readCommitted(taskBucket->src,
+				rc.push_back(readCommitted(taskBucket->getSourceDatabase(),
 				                           results[j],
 				                           Future<Void>(Void()),
 				                           locks[j],
@@ -1019,7 +1020,7 @@ struct CopyLogsTaskFunc : TaskFuncBase {
 		state Future<Optional<Value>> fAppliedValue =
 		    tr->get(task->params[BackupAgentBase::keyConfigLogUid].withPrefix(applyMutationsBeginRange.begin));
 
-		Transaction srcTr(taskBucket->src);
+		Transaction srcTr(taskBucket->getSourceDatabase());
 		srcTr.setOption(FDBTransactionOptions::LOCK_AWARE);
 		state Version endVersion = wait(srcTr.getReadVersion());
 
@@ -1190,7 +1191,7 @@ struct FinishedFullBackupTaskFunc : TaskFuncBase {
 			}
 		}
 
-		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		state Key logUidValue = task->params[DatabaseBackupAgent::keyConfigLogUid];
 		state Key destUidValue = task->params[BackupAgentBase::destUid];
 		state Version backupUid =
@@ -1311,7 +1312,7 @@ struct CopyDiffLogsTaskFunc : TaskFuncBase {
 		    BinaryReader::fromStringRef<Version>(task->params[DatabaseBackupAgent::keyPrevBeginVersion], Unversioned());
 		state Future<Optional<Value>> fStopWhenDone = tr->get(conf.pack(DatabaseBackupAgent::keyConfigStopWhenDoneKey));
 
-		Transaction srcTr(taskBucket->src);
+		Transaction srcTr(taskBucket->getSourceDatabase());
 		srcTr.setOption(FDBTransactionOptions::LOCK_AWARE);
 		state Version endVersion = wait(srcTr.getReadVersion());
 
@@ -1605,7 +1606,7 @@ struct OldCopyLogRangeTaskFunc : TaskFuncBase {
 
 		for (int i = 0; i < ranges.size(); ++i) {
 			results.push_back(PromiseStream<RCGroup>());
-			rc.push_back(readCommitted(taskBucket->src,
+			rc.push_back(readCommitted(taskBucket->getSourceDatabase(),
 			                           results[i],
 			                           Future<Void>(Void()),
 			                           lock,
@@ -1697,7 +1698,7 @@ struct AbortOldBackupTaskFunc : TaskFuncBase {
 	                                   Reference<TaskBucket> taskBucket,
 	                                   Reference<FutureBucket> futureBucket,
 	                                   Reference<Task> task) {
-		state DatabaseBackupAgent srcDrAgent(taskBucket->src);
+		state DatabaseBackupAgent srcDrAgent(taskBucket->getSourceDatabase());
 		state Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
 		state Key tagNameKey;
 
@@ -1823,7 +1824,7 @@ struct CopyDiffLogsUpgradeTaskFunc : TaskFuncBase {
 
 		// Set destUidValue and versionKey on src side
 		state Key destUidValue(logUidValue);
-		state Reference<ReadYourWritesTransaction> srcTr(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> srcTr(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		loop {
 			try {
 				srcTr->setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -1938,7 +1939,7 @@ struct BackupRestorableTaskFunc : TaskFuncBase {
 		                                  .get(BackupAgentBase::keySourceStates)
 		                                  .get(task->params[BackupAgentBase::keyConfigLogUid]);
 		wait(checkTaskVersion(cx, task, BackupRestorableTaskFunc::name, BackupRestorableTaskFunc::version));
-		state Transaction tr(taskBucket->src);
+		state Transaction tr(taskBucket->getSourceDatabase());
 		loop {
 			try {
 				tr.setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -2076,7 +2077,7 @@ struct StartFullBackupTaskFunc : TaskFuncBase {
 		        task->params[DatabaseBackupAgent::keyConfigBackupRanges], IncludeVersion());
 		state Key beginVersionKey;
 
-		state Reference<ReadYourWritesTransaction> srcTr(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> srcTr(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		loop {
 			try {
 				srcTr->setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -2158,7 +2159,7 @@ struct StartFullBackupTaskFunc : TaskFuncBase {
 			}
 		}
 
-		state Reference<ReadYourWritesTransaction> srcTr2(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> srcTr2(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		loop {
 			try {
 				srcTr2->setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -2195,7 +2196,7 @@ struct StartFullBackupTaskFunc : TaskFuncBase {
 			}
 		}
 
-		state Reference<ReadYourWritesTransaction> srcTr3(new ReadYourWritesTransaction(taskBucket->src));
+		state Reference<ReadYourWritesTransaction> srcTr3(new ReadYourWritesTransaction(taskBucket->getSourceDatabase()));
 		loop {
 			try {
 				srcTr3->setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -2643,7 +2644,7 @@ public:
 
 		state Version readVersion = invalidVersion;
 		if (backupAction == DatabaseBackupAgent::PreBackupAction::NONE) {
-			Transaction readTransaction(backupAgent->taskBucket->src);
+			Transaction readTransaction(backupAgent->taskBucket->getSourceDatabase());
 			readTransaction.setOption(FDBTransactionOptions::LOCK_AWARE);
 			Version _ = wait(readTransaction.getReadVersion());
 			readVersion = _;
@@ -2705,14 +2706,14 @@ public:
 		}
 
 		if (!g_network->isSimulated() && !forceAction) {
-			state StatusObject srcStatus = wait(StatusClient::statusFetcher(backupAgent->taskBucket->src));
+			state StatusObject srcStatus = wait(StatusClient::statusFetcher(backupAgent->taskBucket->getSourceDatabase()));
 			StatusObject destStatus = wait(StatusClient::statusFetcher(dest));
 			checkAtomicSwitchOverConfig(srcStatus, destStatus, tagName);
 		}
 
 		state UID logUid = deterministicRandom()->randomUniqueID();
 		state Key logUidValue = BinaryWriter::toValue(logUid, Unversioned());
-		state UID logUidCurrent = wait(drAgent.getLogUid(backupAgent->taskBucket->src, tagName));
+		state UID logUidCurrent = wait(drAgent.getLogUid(backupAgent->taskBucket->getSourceDatabase(), tagName));
 
 		if (logUidCurrent.isValid()) {
 			logUid = logUidCurrent;
@@ -2720,7 +2721,7 @@ public:
 		}
 
 		// Lock src, record commit version
-		state Transaction tr(backupAgent->taskBucket->src);
+		state Transaction tr(backupAgent->taskBucket->getSourceDatabase());
 		state Version commitVersion;
 		loop {
 			try {
@@ -2804,7 +2805,7 @@ public:
 		TraceEvent("DBA_SwitchoverVersionUpgraded").log();
 
 		try {
-			wait(drAgent.submitBackup(backupAgent->taskBucket->src,
+			wait(drAgent.submitBackup(backupAgent->taskBucket->getSourceDatabase(),
 			                          tagName,
 			                          backupRanges,
 			                          StopWhenDone::False,
@@ -2819,7 +2820,7 @@ public:
 
 		TraceEvent("DBA_SwitchoverSubmitted").log();
 
-		wait(success(drAgent.waitSubmitted(backupAgent->taskBucket->src, tagName)));
+		wait(success(drAgent.waitSubmitted(backupAgent->taskBucket->getSourceDatabase(), tagName)));
 
 		TraceEvent("DBA_SwitchoverStarted").log();
 
@@ -2967,7 +2968,7 @@ public:
 		if (!dstOnly) {
 			state Future<Void> partialTimeout = partial ? delay(30.0) : Never();
 			state Reference<ReadYourWritesTransaction> srcTr(
-			    new ReadYourWritesTransaction(backupAgent->taskBucket->src));
+			    new ReadYourWritesTransaction(backupAgent->taskBucket->getSourceDatabase()));
 
 			loop {
 				try {
@@ -3071,7 +3072,7 @@ public:
 				wait(success(tr->getReadVersion())); // get the read version before getting a version from the source
 				                                     // database to prevent the time differential from going negative
 
-				state Transaction scrTr(backupAgent->taskBucket->src);
+				state Transaction scrTr(backupAgent->taskBucket->getSourceDatabase());
 				scrTr.setOption(FDBTransactionOptions::LOCK_AWARE);
 				state Future<Version> srcReadVersion = scrTr.getReadVersion();
 

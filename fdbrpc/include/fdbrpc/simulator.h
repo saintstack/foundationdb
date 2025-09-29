@@ -362,6 +362,7 @@ public:
 	bool setDiffProtocol; // true if a process with a different protocol version has been started
 
 	bool allowStorageMigrationTypeChange = false;
+	bool blobstoreOperationsActive = false; // Set to true when any workload uses blobstore:// URLs
 	double injectTargetedSSRestartTime = std::numeric_limits<double>::max();
 	double injectSSDelayTime = std::numeric_limits<double>::max();
 	double injectTargetedBMRestartTime = std::numeric_limits<double>::max();
@@ -417,6 +418,7 @@ public:
 	std::set<IPAddress> httpServerIps;
 	int nextHTTPPort = 5000;
 	bool httpProtected = false;
+	bool httpServerProcessSwitchingEnabled = false;
 
 	flowGlobalType global(int id) const final;
 	void setGlobal(size_t id, flowGlobalType v) final;

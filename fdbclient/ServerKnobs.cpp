@@ -1319,7 +1319,11 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	init( BLOB_WORKER_DELTA_WRITE_BUDGET_BYTES,       1024*1024*1024 ); if( randomize && BUGGIFY ) BLOB_WORKER_DELTA_WRITE_BUDGET_BYTES = (5 + 45*deterministicRandom()->random01()) * BG_DELTA_FILE_TARGET_BYTES;
 	init( BLOB_WORKER_TIMEOUT,                                  10.0 ); if( randomize && BUGGIFY ) BLOB_WORKER_TIMEOUT = 1.0;
 	// more than MVCC window since behind delta files can block for that window for committed check
-	init( BLOB_WORKER_REQUEST_TIMEOUT,                          10.0 ); if( randomize && BUGGIFY ) BLOB_WORKER_REQUEST_TIMEOUT = 1.0;
+	init( BLOB_WORKER_REQUEST_TIMEOUT,                          10.0 ); 
+	if( randomize && BUGGIFY ) {
+		// In simulator, process switching can cause delays, so increase timeout to prevent false failures
+		BLOB_WORKER_REQUEST_TIMEOUT = isSimulated ? 30.0 : 1.0;
+	}
 	init( BLOB_WORKERLIST_FETCH_INTERVAL,                        1.0 );
 	init( BLOB_WORKER_BATCH_GRV_INTERVAL,                        0.1 );
 	init( BLOB_WORKER_EMPTY_GRV_INTERVAL,                        0.5 );

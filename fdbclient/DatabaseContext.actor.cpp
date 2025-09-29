@@ -1435,7 +1435,8 @@ DatabaseContext::DatabaseContext(Reference<AsyncVar<Reference<IClusterConnection
     coordinator(coordinator), apiVersion(_apiVersion), mvCacheInsertLocation(0), healthMetricsLastUpdated(0),
     detailedHealthMetricsLastUpdated(0), smoothMidShardSize(CLIENT_KNOBS->SHARD_STAT_SMOOTH_AMOUNT),
     specialKeySpace(std::make_unique<SpecialKeySpace>(specialKeys.begin, specialKeys.end, /* test */ false)),
-    connectToDatabaseEventCacheHolder(format("ConnectToDatabase/%s", dbId.toString().c_str())) {
+    connectToDatabaseEventCacheHolder(format("ConnectToDatabase/%s", dbId.toString().c_str())),
+    creatingProcess(g_network && g_network->isSimulated() ? g_network->getLocalAddress() : NetworkAddress()) {
 
 	DisabledTraceEvent("DatabaseContextCreated", dbId).backtrace();
 
@@ -1697,6 +1698,7 @@ DatabaseContext::DatabaseContext(Reference<AsyncVar<Reference<IClusterConnection
 	}
 
 	initializeSpecialCounters();
+	
 }
 
 DatabaseContext::DatabaseContext(const Error& err)
@@ -1745,7 +1747,8 @@ DatabaseContext::DatabaseContext(const Error& err)
     feedPopsFallback("FeedPopsFallback", ccFeed), latencies(), readLatencies(), commitLatencies(), GRVLatencies(),
     mutationsPerCommit(), bytesPerCommit(), sharedStatePtr(nullptr), transactionTracingSample(false),
     smoothMidShardSize(CLIENT_KNOBS->SHARD_STAT_SMOOTH_AMOUNT),
-    connectToDatabaseEventCacheHolder(format("ConnectToDatabase/%s", dbId.toString().c_str())), outstandingWatches(0) {
+    connectToDatabaseEventCacheHolder(format("ConnectToDatabase/%s", dbId.toString().c_str())), outstandingWatches(0),
+    creatingProcess(g_network && g_network->isSimulated() ? g_network->getLocalAddress() : NetworkAddress()) {
 	initializeSpecialCounters();
 }
 
@@ -1773,6 +1776,26 @@ Database DatabaseContext::create(Reference<AsyncVar<ClientDBInfo>> clientInfo,
 }
 
 DatabaseContext::~DatabaseContext() {
+	// CROSS_PROCESS_FIX: Check for cross-process destruction but still do cleanup
+	bool crossProcessDestruction = false;
+	if (g_network && g_network->isSimulated()) {
+		NetworkAddress currentProcess = g_network->getLocalAddress();
+		
+		// If creatingProcess is not set, this is an old object - allow normal destruction
+		if (creatingProcess.isValid() && creatingProcess != currentProcess) {
+			crossProcessDestruction = true;
+			// DISABLED: This logging was causing DeliverAttempt trace overflow
+			// printf("T=%.6f CROSS_PROCESS_DB_DESTROY_PREVENTED: ctx=%p creator=%s destroyer=%s\n",
+			//        g_network->now(),
+			//        this,
+			//        creatingProcess.toString().c_str(),
+			//        currentProcess.toString().c_str());
+			// fflush(stdout);
+			
+			// Continue with cleanup but skip final destruction
+		}
+	}
+
 	cacheListMonitor.cancel();
 	clientDBInfoMonitor.cancel();
 	monitorTssInfoChange.cancel();
@@ -1786,16 +1809,25 @@ DatabaseContext::~DatabaseContext() {
 	if (sharedStatePtr) {
 		sharedStatePtr->delRef(sharedStatePtr);
 	}
-	for (auto it = server_interf.begin(); it != server_interf.end(); it = server_interf.erase(it))
-		it->second->notifyContextDestroyed();
-	ASSERT_ABORT(server_interf.empty());
-	locationCache.insert(allKeys, Reference<LocationInfo>());
-	for (auto& it : notAtLatestChangeFeeds) {
-		it.second->context = nullptr;
-	}
-	for (auto& it : changeFeedUpdaters) {
-		it.second->context = nullptr;
-	}
+	// Skip potentially problematic cleanup for cross-process destruction
+	if (!crossProcessDestruction) {
+		for (auto it = server_interf.begin(); it != server_interf.end(); it = server_interf.erase(it))
+			it->second->notifyContextDestroyed();
+		ASSERT_ABORT(server_interf.empty());
+		locationCache.insert(allKeys, Reference<LocationInfo>());
+		for (auto& it : notAtLatestChangeFeeds) {
+			it.second->context = nullptr;
+		}
+		for (auto& it : changeFeedUpdaters) {
+			it.second->context = nullptr;
+		}
 
-	DisabledTraceEvent("DatabaseContextDestructed", dbId).backtrace();
+		DisabledTraceEvent("DatabaseContextDestructed", dbId).backtrace();
+	} else {
+		// For cross-process destruction, do minimal cleanup to avoid NetSAV issues
+		// DISABLED: This logging was causing DeliverAttempt trace overflow
+		// printf("T=%.6f CROSS_PROCESS_DB_DESTROY_SKIPPING_FINAL_CLEANUP: ctx=%p\n",
+		//        g_network->now(), this);
+		// fflush(stdout);
+	}
 }

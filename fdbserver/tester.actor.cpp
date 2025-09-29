@@ -2463,6 +2463,17 @@ TestSet readTOMLTests_(std::string fileName) {
 				workloadOptions.push_back_deep(workloadOptions.arena(),
 				                               KeyValueRef(StringRef(attrib), StringRef(value)));
 				TraceEvent("TestParserOption").detail("ParsedKey", attrib).detail("ParsedValue", value);
+				
+				// Set blobstore flag as early as possible during test parsing
+				if (attrib == "backupURL" && value.find("blobstore://") == 0) {
+					TraceEvent("BlobstoreURLFound").detail("URL", value).detail("HasNetwork", g_network != nullptr).detail("IsSimulated", g_network && g_network->isSimulated());
+					if (g_network && g_network->isSimulated()) {
+						g_simulator->blobstoreOperationsActive = true;
+						TraceEvent("BlobstoreOperationsDetected").detail("URL", value).detail("FlagSet", true);
+					} else {
+						TraceEvent("BlobstoreOperationsNotSet").detail("URL", value).detail("HasNetwork", g_network != nullptr).detail("IsSimulated", g_network && g_network->isSimulated());
+					}
+				}
 			}
 			spec.options.push_back_deep(spec.options.arena(), workloadOptions);
 		}
