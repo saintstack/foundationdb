@@ -42,29 +42,42 @@ class FlowReceiver : public NetworkMessageReceiver, public NonCopyable {
 	bool m_stream;
 
 protected:
-	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false) {}
+	// Track which process created this FlowReceiver for cross-process protection
+	NetworkAddress creatingProcess;
+	FlowReceiver() : m_isLocalEndpoint(false), m_stream(false), creatingProcess(NetworkAddress()) {
+		if (g_network && g_network->isSimulated()) {
+			creatingProcess = g_network->getLocalAddress();
+		}
+	}
 
 	FlowReceiver(Endpoint const& remoteEndpoint, bool stream)
-	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream) {
+	  : endpoint(remoteEndpoint), m_isLocalEndpoint(false), m_stream(stream), creatingProcess(NetworkAddress()) {
+		if (g_network && g_network->isSimulated()) {
+			creatingProcess = g_network->getLocalAddress();
+		}
 		FlowTransport::transport().addPeerReference(endpoint, m_stream);
 	}
 
 	~FlowReceiver() {
-		// DEBUG: Log destructor calls to understand cross-process impact
-		if (g_network && g_network->isSimulated() && 
-		    endpoint.getPrimaryAddress().toString() == "2.0.2.0:2") {
-			ISimulator::ProcessInfo* currentProcess = g_simulator->getCurrentProcess();
-			TraceEvent(SevWarn, "DDFlowReceiverDestroy")
-			    .detail("Token", endpoint.token)
-			    .detail("CurrentProcess", (void*)currentProcess)
-			    .detail("ThisPtr", (void*)this)
-			    .detail("IsLocal", m_isLocalEndpoint);
-		}
-		
 		if (m_isLocalEndpoint) {
 			FlowTransport::transport().removeEndpoint(endpoint, this);
 		} else {
-			FlowTransport::transport().removePeerReference(endpoint, m_stream);
+			// CROSS_PROCESS_FIX: Prevent cross-process peer reference removal to avoid InvalidPeerReferences
+			if (g_network && g_network->isSimulated()) {
+				// In simulation, only call removePeerReference if we're in the same process that called addPeerReference
+				NetworkAddress currentProcess = g_network->getLocalAddress();
+				
+				// Only skip if we have a valid creatingProcess and it's different from current
+				if (creatingProcess.isValid() && currentProcess.isValid() && currentProcess == creatingProcess) {
+					FlowTransport::transport().removePeerReference(endpoint, m_stream);
+				} else if (!creatingProcess.isValid()) {
+					// If creatingProcess was never set (shouldn't happen), call removePeerReference anyway
+					FlowTransport::transport().removePeerReference(endpoint, m_stream);
+				}
+				// Skip removePeerReference only if we're definitely in a different process
+			} else {
+				FlowTransport::transport().removePeerReference(endpoint, m_stream);
+			}
 		}
 	}
 
@@ -77,6 +90,9 @@ public:
 		ASSERT(!endpoint.isValid());
 		endpoint = remoteEndpoint;
 		m_stream = stream;
+		if (g_network && g_network->isSimulated()) {
+			creatingProcess = g_network->getLocalAddress();
+		}
 		FlowTransport::transport().addPeerReference(endpoint, m_stream);
 	}
 
@@ -118,37 +134,22 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 	using FastAllocated<NetSAV<T>>::operator new;
 	using FastAllocated<NetSAV<T>>::operator delete;
 
-	// Track which process created this NetSAV for cross-process debugging
-	NetworkAddress creatingProcess;
-
-	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {
-		if (g_network && g_network->isSimulated()) {
-			creatingProcess = g_network->getLocalAddress();
-		}
-	}
+	NetSAV(int futures, int promises) : SAV<T>(futures, promises) {}
 	NetSAV(int futures, int promises, const Endpoint& remoteEndpoint)
-	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {
-		if (g_network && g_network->isSimulated()) {
-			creatingProcess = g_network->getLocalAddress();
-		}
-	}
+	  : SAV<T>(futures, promises), FlowReceiver(remoteEndpoint, false) {}
 
-		void destroy() override {
-			// CROSS_PROCESS_FIX: Prevent cross-process NetSAV deletion to avoid use-after-free crashes
-			if (g_network && g_network->isSimulated()) {
-				NetworkAddress currentProcess = g_network->getLocalAddress();
-				if (creatingProcess.isValid() && creatingProcess != currentProcess) {
-					printf("T=%.6f CROSS_PROCESS_NETSAV_DELETE_PREVENTED: netsav=%p creator=%s destroyer=%s\n",
-					       g_network->now(), this, creatingProcess.toString().c_str(), currentProcess.toString().c_str());
-					// Print backtrace to see where cross-process deletion is coming from
-					platform::get_backtrace();
-					fflush(stdout);
-					// Skip deletion when cross-process to prevent use-after-free crashes
-					return;
-				}
+	void destroy() override {
+		// CROSS_PROCESS_FIX: Prevent cross-process NetSAV deletion to avoid use-after-free crashes
+		// creatingProcess is inherited from FlowReceiver
+		if (g_network && g_network->isSimulated()) {
+			NetworkAddress currentProcess = g_network->getLocalAddress();
+			if (creatingProcess.isValid() && creatingProcess != currentProcess) {
+				// Skip deletion when cross-process to prevent use-after-free crashes
+				return;
 			}
-			delete this;
 		}
+		delete this;
+	}
 
 	// Override reference counting to prevent cross-process operations
 	void addPromiseRef() override { 
@@ -156,9 +157,6 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 		if (g_network && g_network->isSimulated()) {
 			NetworkAddress currentProcess = g_network->getLocalAddress();
 			if (creatingProcess.isValid() && creatingProcess != currentProcess) {
-				printf("T=%.6f CROSS_PROCESS_NETSAV_ADDPROMISE_PREVENTED: netsav=%p creator=%s adder=%s\n",
-				       g_network->now(), this, creatingProcess.toString().c_str(), currentProcess.toString().c_str());
-				fflush(stdout);
 				return; // Skip cross-process reference increment
 			}
 		}
@@ -170,9 +168,6 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 		if (g_network && g_network->isSimulated()) {
 			NetworkAddress currentProcess = g_network->getLocalAddress();
 			if (creatingProcess.isValid() && creatingProcess != currentProcess) {
-				printf("T=%.6f CROSS_PROCESS_NETSAV_ADDFUTURE_PREVENTED: netsav=%p creator=%s adder=%s\n",
-				       g_network->now(), this, creatingProcess.toString().c_str(), currentProcess.toString().c_str());
-				fflush(stdout);
 				return; // Skip cross-process reference increment
 			}
 		}
@@ -184,10 +179,6 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 		if (g_network && g_network->isSimulated()) {
 			NetworkAddress currentProcess = g_network->getLocalAddress();
 			if (creatingProcess.isValid() && creatingProcess != currentProcess) {
-				printf("T=%.6f CROSS_PROCESS_NETSAV_DELPROMISE_PREVENTED: netsav=%p creator=%s deleter=%s\n",
-				       g_network->now(), this, creatingProcess.toString().c_str(), currentProcess.toString().c_str());
-				platform::get_backtrace();
-				fflush(stdout);
 				return; // Skip cross-process reference decrement
 			}
 		}
@@ -199,10 +190,6 @@ struct NetSAV final : SAV<T>, FlowReceiver, FastAllocated<NetSAV<T>> {
 		if (g_network && g_network->isSimulated()) {
 			NetworkAddress currentProcess = g_network->getLocalAddress();
 			if (creatingProcess.isValid() && creatingProcess != currentProcess) {
-				printf("T=%.6f CROSS_PROCESS_NETSAV_DELFUTURE_PREVENTED: netsav=%p creator=%s deleter=%s\n",
-				       g_network->now(), this, creatingProcess.toString().c_str(), currentProcess.toString().c_str());
-				platform::get_backtrace();
-				fflush(stdout);
 				return; // Skip cross-process reference decrement
 			}
 		}

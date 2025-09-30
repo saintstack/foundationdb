@@ -1102,15 +1102,54 @@ ACTOR Future<Reference<HTTP::IncomingResponse>> doRequest_impl(Reference<S3BlobS
 			// chain to contentCopy
 			req->data.content->discardAll();
 			if (pContent != nullptr) {
+				// CROSS_PROCESS_FIX: Ensure buffer integrity for large HTTP request content
+				// Use single buffer approach to prevent corruption during transmission
 				PacketBuffer* pFirst = pContent->getUnsent();
-				PacketBuffer* pLast = nullptr;
-				for (PacketBuffer* p = pFirst; p != nullptr; p = p->nextPacketBuffer()) {
-					p->addref();
-					// Also reset the sent count on each buffer
-					p->bytes_sent = 0;
-					pLast = p;
+				
+				if (contentLen > 10000) {
+					// For large content, create a single consolidated buffer to prevent chain corruption
+					PacketBuffer* consolidatedBuffer = PacketBuffer::create(contentLen + 1); // Extra byte for safety
+					
+					// Copy all content from the buffer chain into a single buffer
+					size_t totalCopied = 0;
+					for (PacketBuffer* p = pFirst; p != nullptr && totalCopied < contentLen; p = p->nextPacketBuffer()) {
+						size_t availableInBuffer = p->bytes_written - p->bytes_sent;
+						size_t toCopy = std::min(availableInBuffer, (size_t)(contentLen - totalCopied));
+						
+						if (toCopy > 0) {
+							memcpy(consolidatedBuffer->data() + totalCopied, p->data() + p->bytes_sent, toCopy);
+							totalCopied += toCopy;
+						}
+					}
+					
+					// Set the exact content length
+					consolidatedBuffer->bytes_written = contentLen;
+					
+					// Zero out any remaining buffer space for safety
+					if (consolidatedBuffer->size() > contentLen) {
+						memset(consolidatedBuffer->data() + contentLen, 0, consolidatedBuffer->size() - contentLen);
+					}
+					
+					// Add the single consolidated buffer
+					req->data.content->prependWriteBuffer(consolidatedBuffer, consolidatedBuffer);
+					
+					// Debug logging for large content
+					printf("DEBUG_HTTP_REQUEST_BUFFER: contentLen=%d buffer_size=%zu bytes_written=%d first_char=0x%02x last_char=0x%02x process=%s\n",
+					       contentLen, consolidatedBuffer->size(), consolidatedBuffer->bytes_written,
+					       contentLen > 0 ? (unsigned char)consolidatedBuffer->data()[0] : 0,
+					       contentLen > 0 ? (unsigned char)consolidatedBuffer->data()[contentLen-1] : 0,
+					       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+				} else {
+					// For small content, use the original approach
+					PacketBuffer* pLast = nullptr;
+					for (PacketBuffer* p = pFirst; p != nullptr; p = p->nextPacketBuffer()) {
+						p->addref();
+						// Also reset the sent count on each buffer
+						p->bytes_sent = 0;
+						pLast = p;
+					}
+					req->data.content->prependWriteBuffer(pFirst, pLast);
 				}
-				req->data.content->prependWriteBuffer(pFirst, pLast);
 			}
 
 			// Finish connecting, do request
@@ -2061,15 +2100,26 @@ ACTOR Future<int> readObject_impl(Reference<S3BlobStoreEndpoint> bstore,
 			throw io_error();
 		}
 
-		try {
-			// Copy the output bytes, server could have sent more or less bytes than requested so copy at most length
-			// bytes
-			memcpy(data, r->data.content.data(), std::min<int64_t>(r->data.contentLen, length));
-			return r->data.contentLen;
-		} catch (Error& e) {
-			TraceEvent(SevWarn, "S3BlobStoreReadObjectMemcpyError").detail("Error", e.what());
-			throw io_error();
+	try {
+		// Copy the output bytes, server could have sent more or less bytes than requested so copy at most length
+		// bytes
+		int bytesToCopy = std::min<int64_t>(r->data.contentLen, length);
+		
+		// Debug logging for partial reads
+		if (bytesToCopy != length && bytesToCopy > 0) {
+			printf("DEBUG_S3_READ_PARTIAL: requested=%d received=%d returning=%d offset=%ld process=%s\n",
+			       length, (int)r->data.contentLen, bytesToCopy, (long)offset,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
 		}
+		
+		memcpy(data, r->data.content.data(), bytesToCopy);
+		// CRITICAL FIX: Return the number of bytes actually copied, not the contentLen
+		// This ensures AsyncFileEncrypted gets blocks of the correct size (4KB)
+		return bytesToCopy;
+	} catch (Error& e) {
+		TraceEvent(SevWarn, "S3BlobStoreReadObjectMemcpyError").detail("Error", e.what());
+		throw io_error();
+	}
 	} catch (Error& e) {
 		TraceEvent(SevWarn, "S3BlobStoreEndpoint_ReadError")
 		    .error(e)

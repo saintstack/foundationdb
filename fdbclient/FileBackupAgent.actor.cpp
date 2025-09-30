@@ -1872,10 +1872,21 @@ ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeRangeFileBlock(Reference<
                                                                       int64_t offset,
                                                                       int len,
                                                                       Database cx) {
+	// BACKUP_DEBUG: Add debug logging for decodeRangeFileBlock entry
+	printf("DEBUG_DECODE_RANGE_START: file=%s offset=%lld len=%d process=%s\n",
+	       file->getFilename().c_str(), (long long)offset, len,
+	       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+	fflush(stdout);
+	
 	state Standalone<StringRef> buf = makeString(len);
 	int rLen = wait(uncancellable(holdWhile(buf, file->read(mutateString(buf), len, offset))));
-	if (rLen != len)
+	if (rLen != len) {
+		printf("DEBUG_DECODE_RANGE_BAD_READ: file=%s expected=%d actual=%d process=%s\n",
+		       file->getFilename().c_str(), len, rLen,
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
 		throw restore_bad_read();
+	}
 
 	simulateBlobFailure();
 
@@ -1895,6 +1906,13 @@ ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeRangeFileBlock(Reference<
 		// Read header, currently only decoding BACKUP_AGENT_SNAPSHOT_FILE_VERSION or
 		// BACKUP_AGENT_ENCRYPTED_SNAPSHOT_FILE_VERSION
 		int32_t file_version = reader.consume<int32_t>();
+		
+		// BACKUP_DEBUG: Add debug logging for range file reading
+		printf("DEBUG_RANGE_READ: file_version=%d len=%lld remaining=%lld process=%s\n",
+		       file_version, (long long)len, (long long)reader.remainder().size(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		ASSERT(!encryptMode.isEncryptionEnabled() || file_version == BACKUP_AGENT_ENCRYPTED_SNAPSHOT_FILE_VERSION);
 		if (file_version == BACKUP_AGENT_SNAPSHOT_FILE_VERSION) {
 			wait(decodeKVPairs(&reader, &results, false, encryptMode, Optional<int64_t>(), tenantCache));
@@ -1929,8 +1947,17 @@ ACTOR Future<Standalone<VectorRef<KeyValueRef>>> decodeRangeFileBlock(Reference<
 		} else {
 			throw restore_unsupported_file_version();
 		}
+		printf("DEBUG_DECODE_RANGE_SUCCESS: file=%s kvs=%d process=%s\n",
+		       file->getFilename().c_str(), results.size(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
 		return results;
 	} catch (Error& e) {
+		printf("DEBUG_DECODE_RANGE_ERROR: file=%s error=%d msg=%s process=%s\n",
+		       file->getFilename().c_str(), e.code(), e.what(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		if (e.code() == error_code_encrypt_keys_fetch_failed || e.code() == error_code_encrypt_key_not_found) {
 			ASSERT(!isReservedEncryptDomain(blockDomainId));
 			TraceEvent(SevWarnAlways, "SnapshotRestoreEncryptKeyFetchFailed").detail("TenantId", blockDomainId);
@@ -3827,11 +3854,20 @@ struct FileBackupFinishedTask : BackupTaskFuncBase {
 		return key;
 	}
 
+	Future<Void> _execute(Database cx,
+	                     Reference<TaskBucket> taskBucket,
+	                     Reference<FutureBucket> futureBucket,
+	                     Reference<Task> task) {
+		// FileBackupFinishedTask has no execute work - version properties are written
+		// by BackupLogsDispatchTask when it updates latestLogEndVersion
+		return Void();
+	}
+
 	Future<Void> execute(Database cx,
 	                     Reference<TaskBucket> tb,
 	                     Reference<FutureBucket> fb,
 	                     Reference<Task> task) override {
-		return Void();
+		return _execute(cx, tb, fb, task);
 	};
 	Future<Void> finish(Reference<ReadYourWritesTransaction> tr,
 	                    Reference<TaskBucket> tb,
@@ -4430,12 +4466,30 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 		}
 
 		state Reference<IAsyncFile> inFile = wait(bc.get()->readFile(rangeFile.fileName));
+		
+		// BACKUP_DEBUG: Add debug logging for range file reading entry point
+		printf("DEBUG_RESTORE_RANGE_START: file=%s offset=%lld len=%lld process=%s\n",
+		       rangeFile.fileName.c_str(), (long long)readOffset, (long long)readLen,
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		state Standalone<VectorRef<KeyValueRef>> blockData;
 		try {
 			// data is each real KV, not encoded mutations
 			Standalone<VectorRef<KeyValueRef>> data = wait(decodeRangeFileBlock(inFile, readOffset, readLen, cx));
 			blockData = data;
+			
+			// BACKUP_DEBUG: Range file reading succeeded
+			printf("DEBUG_RESTORE_RANGE_SUCCESS: file=%s kvs=%d process=%s\n",
+			       rangeFile.fileName.c_str(), blockData.size(),
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			fflush(stdout);
 		} catch (Error& e) {
+			// BACKUP_DEBUG: Range file reading failed
+			printf("DEBUG_RESTORE_RANGE_FAIL: file=%s error=%d msg=%s process=%s\n",
+			       rangeFile.fileName.c_str(), e.code(), e.what(),
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			fflush(stdout);
 			// It's possible a tenant was deleted and the encrypt key fetch failed
 			if (e.code() == error_code_encrypt_keys_fetch_failed || e.code() == error_code_tenant_not_found ||
 			    e.code() == error_code_encrypt_key_not_found) {
@@ -6701,9 +6755,9 @@ public:
 	                                                UID randomUID,
 	                                                Key addPrefix,
 	                                                Key removePrefix) {
-		// Sanity check backup is valid
-		state Reference<IBackupContainer> bc = IBackupContainer::openContainer(bcUrl.toString(), proxy, {});
-		state BackupDescription desc = wait(bc->describeBackup());
+	// Sanity check backup is valid
+	state Reference<IBackupContainer> bc = IBackupContainer::openContainer(bcUrl.toString(), proxy, {});
+	state BackupDescription desc = wait(bc->describeBackup(false, invalidVersion));
 		wait(desc.resolveVersionTimes(cx));
 
 		if (targetVersion == invalidVersion && desc.maxRestorableVersion.present()) {
@@ -6892,10 +6946,12 @@ public:
 			backupContainer = joinPath(backupContainer, std::string("backup-") + nowStr.toString());
 		}
 
-		state Reference<IBackupContainer> bc =
-		    IBackupContainer::openContainer(backupContainer, proxy, encryptionKeyFileName);
-		try {
-			wait(timeoutError(bc->create(), 30));
+	state Reference<IBackupContainer> bc =
+	    IBackupContainer::openContainer(backupContainer, proxy, encryptionKeyFileName);
+	try {
+		// Use longer timeout in simulation to handle slow S3 mock operations
+		state double createTimeout = g_network->isSimulated() ? 120.0 : 30.0;
+		wait(timeoutError(bc->create(), createTimeout));
 		} catch (Error& e) {
 			if (e.code() == error_code_actor_cancelled)
 				throw;
@@ -7729,10 +7785,10 @@ public:
 			throw restore_error();
 		}
 
-		state Reference<IBackupContainer> bc =
-		    IBackupContainer::openContainer(url.toString(), proxy, encryptionKeyFileName);
+	state Reference<IBackupContainer> bc =
+	    IBackupContainer::openContainer(url.toString(), proxy, encryptionKeyFileName);
 
-		state BackupDescription desc = wait(bc->describeBackup(true));
+	state BackupDescription desc = wait(bc->describeBackup(true, invalidVersion));
 
 		if (desc.fileLevelEncryption && !encryptionKeyFileName.present()) {
 			fprintf(stderr, "ERROR: Backup is encrypted, please provide the encryption key file path.\n");

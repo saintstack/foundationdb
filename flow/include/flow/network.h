@@ -172,6 +172,7 @@ public:
 		enMetrics = 20,
 		enGrpcState = 21,
 		enProxy = 22,
+		enMockS3Server = 23,
 		COUNT // Add new fields before this enumerator
 	};
 

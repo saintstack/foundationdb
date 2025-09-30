@@ -58,6 +58,14 @@ namespace IBackupFile_impl {
 ACTOR Future<Void> appendStringRefWithLen(Reference<IBackupFile> file, Standalone<StringRef> s) {
 	// CROSS_PROCESS_FIX: Don't use state variable for lenBuf to prevent cross-process corruption
 	uint32_t lenBuf = bigEndian32((uint32_t)s.size());
+	
+	// BACKUP_DEBUG: Add debug logging for backup file writing
+	printf("DEBUG_BACKUP_WRITE: file=%s size=%u len_buf=%u contents='%.*s' process=%s\n",
+	       file->getFileName().c_str(), (uint32_t)s.size(), lenBuf, 
+	       (int)std::min(20, (int)s.size()), (char*)s.begin(),
+	       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+	fflush(stdout);
+	
 	wait(file->append(&lenBuf, sizeof(lenBuf)));
 	wait(file->append(s.begin(), s.size()));
 	return Void();
@@ -262,10 +270,20 @@ std::vector<std::string> IBackupContainer::getURLFormats() {
 Reference<IBackupContainer> IBackupContainer::openContainer(const std::string& url,
                                                             const Optional<std::string>& proxy,
                                                             const Optional<std::string>& encryptionKeyFileName) {
-	static std::map<std::string, Reference<IBackupContainer>> m_cache;
-
+	// CROSS_PROCESS_FIX: Disable caching in simulation to avoid stale metadata
+	// Container objects cache file read results (e.g., 404 for missing version properties)
+	// When backup writes metadata after a container has cached "not found", subsequent
+	// describeBackup() calls on the same container see stale cached values
+	// Solution: In simulation, don't cache containers - create fresh ones each time
+	static std::map<std::string, std::map<std::string, Reference<IBackupContainer>>> process_caches;
+	NetworkAddress processAddr = g_network ? g_network->getLocalAddress() : NetworkAddress();
+	std::string processKey = processAddr.isValid() ? processAddr.toString() : "default";
+	std::map<std::string, Reference<IBackupContainer>>& m_cache = process_caches[processKey];
+	
+	// In simulation, skip cache to avoid stale reads
+	bool useCache = !g_network || !g_network->isSimulated();
 	Reference<IBackupContainer>& r = m_cache[url];
-	if (r)
+	if (useCache && r)
 		return r;
 
 	try {

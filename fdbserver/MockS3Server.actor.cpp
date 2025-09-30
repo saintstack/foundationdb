@@ -39,9 +39,11 @@
 
 #include "flow/actorcompiler.h" // This must be the last #include.
 
-// Mock S3 Server Implementation for deterministic testing
-class MockS3ServerImpl {
-public:
+// CROSS_PROCESS_FIX: Truly global storage for MockS3 (shared across all simulated processes)
+// In FDB simulation, each simulated process runs on the same OS thread, so true C++ static
+// variables at file scope ARE shared. Function-local statics are NOT shared due to how
+// simulation switches contexts.
+struct MockS3GlobalStorage {
 	struct ObjectData {
 		std::string content;
 		HTTP::Headers headers;
@@ -50,7 +52,9 @@ public:
 		double lastModified;
 
 		ObjectData() : lastModified(now()) {}
-		ObjectData(const std::string& data) : content(data), lastModified(now()) { etag = generateETag(data); }
+		ObjectData(const std::string& data) : content(data), lastModified(now()) {
+			etag = generateETag(data);
+		}
 
 		static std::string generateETag(const std::string& content) {
 			return "\"" + HTTP::computeMD5Sum(content) + "\"";
@@ -71,10 +75,29 @@ public:
 		}
 	};
 
-	// Storage - Thread-safe access required for concurrent requests
 	std::map<std::string, std::map<std::string, ObjectData>> buckets;
 	std::map<std::string, MultipartUpload> multipartUploads;
-	mutable std::mutex storageMutex; // Protects buckets and multipartUploads
+	mutable std::mutex storageMutex;
+	
+	// Note: In FDB simulation, function-local statics are SHARED across all simulated processes
+	// because they all run on the same OS thread. This is exactly what we want for MockS3 storage.
+	MockS3GlobalStorage() {
+		TraceEvent("MockS3GlobalStorageCreated").detail("Address", format("%p", this));
+	}
+};
+
+// Accessor function - uses function-local static for thread-safe lazy initialization
+// In simulation, this static is shared across all simulated processes (same OS thread)
+static MockS3GlobalStorage& getGlobalStorage() {
+	static MockS3GlobalStorage storage;
+	return storage;
+}
+
+// Mock S3 Server Implementation for deterministic testing
+class MockS3ServerImpl {
+public:
+	using ObjectData = MockS3GlobalStorage::ObjectData;
+	using MultipartUpload = MockS3GlobalStorage::MultipartUpload;
 
 	MockS3ServerImpl() { TraceEvent("MockS3ServerImpl_Constructor").detail("Address", format("%p", this)); }
 
@@ -235,7 +258,7 @@ public:
 		// Create multipart upload
 		MultipartUpload upload(bucket, object);
 		std::string uploadId = upload.uploadId;
-		self->multipartUploads[uploadId] = std::move(upload);
+		getGlobalStorage().multipartUploads[uploadId] = std::move(upload);
 
 		// Generate XML response
 		std::string xml = format("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -275,8 +298,8 @@ public:
 		                ? req->data.content.substr(0, std::min((size_t)20, req->data.content.size()))
 		                : "EMPTY");
 
-		auto uploadIter = self->multipartUploads.find(uploadId);
-		if (uploadIter == self->multipartUploads.end()) {
+		auto uploadIter = getGlobalStorage().multipartUploads.find(uploadId);
+		if (uploadIter == getGlobalStorage().multipartUploads.end()) {
 			self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchUpload", "Upload not found");
 			return Void();
 		}
@@ -310,8 +333,8 @@ public:
 
 		TraceEvent("MockS3MultipartComplete").detail("UploadId", uploadId);
 
-		auto uploadIter = self->multipartUploads.find(uploadId);
-		if (uploadIter == self->multipartUploads.end()) {
+		auto uploadIter = getGlobalStorage().multipartUploads.find(uploadId);
+		if (uploadIter == getGlobalStorage().multipartUploads.end()) {
 			self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchUpload", "Upload not found");
 			return Void();
 		}
@@ -332,19 +355,19 @@ public:
 
 		// Create final object
 		ObjectData obj(combinedContent);
-		self->buckets[bucket][object] = std::move(obj);
+		getGlobalStorage().buckets[bucket][object] = std::move(obj);
 
 		TraceEvent("MockS3MultipartFinalObject")
 		    .detail("UploadId", uploadId)
-		    .detail("StoredSize", self->buckets[bucket][object].content.size())
+		    .detail("StoredSize", getGlobalStorage().buckets[bucket][object].content.size())
 		    .detail("StoredPreview",
-		            self->buckets[bucket][object].content.size() > 0
-		                ? self->buckets[bucket][object].content.substr(
-		                      0, std::min((size_t)20, self->buckets[bucket][object].content.size()))
+		            getGlobalStorage().buckets[bucket][object].content.size() > 0
+		                ? getGlobalStorage().buckets[bucket][object].content.substr(
+		                      0, std::min((size_t)20, getGlobalStorage().buckets[bucket][object].content.size()))
 		                : "EMPTY");
 
 		// Clean up multipart upload
-		self->multipartUploads.erase(uploadId);
+		getGlobalStorage().multipartUploads.erase(uploadId);
 
 		// Generate completion XML response
 		std::string xml = format("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
@@ -355,7 +378,7 @@ public:
 		                         "</CompleteMultipartUploadResult>",
 		                         bucket.c_str(),
 		                         object.c_str(),
-		                         self->buckets[bucket][object].etag.c_str());
+		                         getGlobalStorage().buckets[bucket][object].etag.c_str());
 
 		self->sendXMLResponse(response, 200, xml);
 
@@ -375,14 +398,14 @@ public:
 
 		TraceEvent("MockS3MultipartAbort").detail("UploadId", uploadId);
 
-		auto uploadIter = self->multipartUploads.find(uploadId);
-		if (uploadIter == self->multipartUploads.end()) {
+		auto uploadIter = getGlobalStorage().multipartUploads.find(uploadId);
+		if (uploadIter == getGlobalStorage().multipartUploads.end()) {
 			self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchUpload", "Upload not found");
 			return Void();
 		}
 
 		// Remove multipart upload
-		self->multipartUploads.erase(uploadId);
+		getGlobalStorage().multipartUploads.erase(uploadId);
 
 		response->code = 204; // No Content
 		response->data.contentLen = 0;
@@ -405,8 +428,8 @@ public:
 		    .detail("Object", object)
 		    .detail("TagsXML", req->data.content);
 
-		auto bucketIter = self->buckets.find(bucket);
-		if (bucketIter == self->buckets.end()) {
+		auto bucketIter = getGlobalStorage().buckets.find(bucket);
+		if (bucketIter == getGlobalStorage().buckets.end()) {
 			self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchBucket", "Bucket not found");
 			return Void();
 		}
@@ -441,8 +464,8 @@ public:
 
 		TraceEvent("MockS3GetObjectTags").detail("Bucket", bucket).detail("Object", object);
 
-		auto bucketIter = self->buckets.find(bucket);
-		if (bucketIter == self->buckets.end()) {
+		auto bucketIter = getGlobalStorage().buckets.find(bucket);
+		if (bucketIter == getGlobalStorage().buckets.end()) {
 			self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchBucket", "Bucket not found");
 			return Void();
 		}
@@ -475,10 +498,20 @@ public:
 		// Thread-safe object creation
 		std::string etag;
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
+			
+			// Debug logging for PUT operations with large content
+			if (req->data.content.size() > 10000) {
+				printf("DEBUG_S3_PUT: bucket=%s object=%s content_size=%zu first_char=0x%02x last_char=0x%02x process=%s\n",
+				       bucket.c_str(), object.c_str(), req->data.content.size(),
+				       req->data.content.empty() ? 0 : (unsigned char)req->data.content[0],
+				       req->data.content.empty() ? 0 : (unsigned char)req->data.content[req->data.content.size()-1],
+				       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			}
+			
 			ObjectData obj(req->data.content);
 			etag = obj.etag;
-			self->buckets[bucket][object] = std::move(obj);
+			getGlobalStorage().buckets[bucket][object] = std::move(obj);
 		}
 
 		response->code = 200;
@@ -498,10 +531,10 @@ public:
 		// Thread-safe object access
 		std::string content, etag, contentMD5;
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
 
-			auto bucketIter = self->buckets.find(bucket);
-			if (bucketIter == self->buckets.end()) {
+			auto bucketIter = getGlobalStorage().buckets.find(bucket);
+			if (bucketIter == getGlobalStorage().buckets.end()) {
 				self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchBucket", "Bucket not found");
 				return Void();
 			}
@@ -518,33 +551,95 @@ public:
 			contentMD5 = HTTP::computeMD5Sum(content);
 		}
 
-		response->code = 200;
+		// CRITICAL FIX: Handle HTTP Range header for partial content requests
+		// This is essential for AsyncFileEncrypted to read encrypted blocks correctly
+		size_t rangeStart = 0;
+		size_t rangeEnd = content.size() - 1;
+		bool isRangeRequest = false;
+		
+		auto rangeHeader = req->data.headers.find("Range");
+		if (rangeHeader != req->data.headers.end()) {
+			// Parse Range header: "bytes=start-end"
+			std::string rangeValue = rangeHeader->second;
+			if (rangeValue.substr(0, 6) == "bytes=") {
+				std::string range = rangeValue.substr(6);
+				size_t dashPos = range.find('-');
+				if (dashPos != std::string::npos) {
+					try {
+						rangeStart = std::stoull(range.substr(0, dashPos));
+						std::string endStr = range.substr(dashPos + 1);
+						if (!endStr.empty()) {
+							rangeEnd = std::stoull(endStr);
+						}
+						// Clamp range to actual content size
+						rangeEnd = std::min(rangeEnd, content.size() - 1);
+						rangeStart = std::min(rangeStart, content.size() - 1);
+						isRangeRequest = true;
+					} catch (...) {
+						// Invalid range format, ignore and return full content
+					}
+				}
+			}
+		}
+		
+		// Extract the requested range
+		std::string responseContent;
+		if (isRangeRequest && rangeStart <= rangeEnd) {
+			responseContent = content.substr(rangeStart, rangeEnd - rangeStart + 1);
+			response->code = 206; // Partial Content
+			response->data.headers["Content-Range"] = 
+				format("bytes %zu-%zu/%zu", rangeStart, rangeEnd, content.size());
+			// For range requests, calculate MD5 of the partial content, not full content
+			contentMD5 = HTTP::computeMD5Sum(responseContent);
+		} else {
+			responseContent = content;
+			response->code = 200;
+		}
+
 		response->data.headers["ETag"] = etag;
 		response->data.headers["Content-Type"] = "binary/octet-stream";
 		response->data.headers["Content-MD5"] = contentMD5;
 
-		// Write content to response - CRITICAL FIX: Avoid PacketWriter to prevent malloc corruption
+		// Write content to response - CROSS_PROCESS_FIX: Use HTTP string content to bypass packet buffer issues
 
-		if (content.empty()) {
-			response->data.contentLen = 0;
-		} else {
-			// FIXED: Actually put the content data into the response
-			// The previous approach created an empty UnsentPacketQueue, causing memory corruption
-			size_t contentSize = content.size();
-
-			response->data.content = new UnsentPacketQueue();
-			response->data.contentLen = contentSize;
-			response->data.headers["Content-Length"] = std::to_string(contentSize);
-
-			// CRITICAL: Use PacketWriter to properly populate the content
-			PacketBuffer* buffer = response->data.content->getWriteBuffer(contentSize);
-			PacketWriter pw(buffer, nullptr, Unversioned());
-			pw.serializeBytes(content);
-			pw.finish();
-
-			TraceEvent("MockS3GetObject_FixedContent")
-			    .detail("ContentSize", contentSize)
-			    .detail("ResponseCode", response->code);
+		response->data.contentLen = responseContent.size();
+		response->data.headers["Content-Length"] = std::to_string(responseContent.size());
+		
+		// CROSS_PROCESS_FIX: Ensure buffer integrity for large JSON content
+		response->data.content = new UnsentPacketQueue();
+		
+		if (!responseContent.empty()) {
+			// CRITICAL FIX: Allocate extra byte for safety and ensure proper termination
+			size_t bufferSize = responseContent.size() + 1;  // Extra byte for safety
+			PacketBuffer* buffer = PacketBuffer::create(bufferSize);
+			
+			// Copy content with explicit size check
+			ASSERT(responseContent.size() <= buffer->size());
+			memcpy(buffer->data(), responseContent.data(), responseContent.size());
+			
+			// Explicitly set the written bytes to exact content size (no extra byte)
+			buffer->bytes_written = responseContent.size();
+			
+			// Zero out any remaining buffer space for safety
+			if (buffer->size() > responseContent.size()) {
+				memset(buffer->data() + responseContent.size(), 0, buffer->size() - responseContent.size());
+			}
+			
+			// Add the buffer to the queue
+			response->data.content->prependWriteBuffer(buffer, buffer);
+			
+			// Debug logging for range requests and large content
+			if (isRangeRequest) {
+				printf("DEBUG_S3_RANGE: range=%zu-%zu total=%zu response_size=%zu first_char=0x%02x last_char=0x%02x process=%s\n",
+				       rangeStart, rangeEnd, content.size(), responseContent.size(),
+				       (unsigned char)responseContent[0], (unsigned char)responseContent[responseContent.size()-1],
+				       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			} else if (responseContent.size() > 10000) {
+				printf("DEBUG_S3_BUFFER: content_size=%zu buffer_size=%zu bytes_written=%d first_char=0x%02x last_char=0x%02x process=%s\n",
+				       responseContent.size(), buffer->size(), buffer->bytes_written,
+				       (unsigned char)responseContent[0], (unsigned char)responseContent[responseContent.size()-1],
+				       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			}
 		}
 
 		return Void();
@@ -559,9 +654,9 @@ public:
 		TraceEvent("MockS3DeleteObject").detail("Bucket", bucket).detail("Object", object);
 
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
-			auto bucketIter = self->buckets.find(bucket);
-			if (bucketIter != self->buckets.end()) {
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
+			auto bucketIter = getGlobalStorage().buckets.find(bucket);
+			if (bucketIter != getGlobalStorage().buckets.end()) {
 				bucketIter->second.erase(object);
 			}
 		}
@@ -586,14 +681,14 @@ public:
 		size_t contentSize;
 		std::string preview;
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
 
-			auto bucketIter = self->buckets.find(bucket);
-			if (bucketIter == self->buckets.end()) {
+			auto bucketIter = getGlobalStorage().buckets.find(bucket);
+			if (bucketIter == getGlobalStorage().buckets.end()) {
 				TraceEvent("MockS3HeadObjectNoBucket")
 				    .detail("Bucket", bucket)
 				    .detail("Object", object)
-				    .detail("AvailableBuckets", self->buckets.size());
+				    .detail("AvailableBuckets", getGlobalStorage().buckets.size());
 				self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchBucket", "Bucket not found");
 				return Void();
 			}
@@ -654,11 +749,11 @@ public:
 		std::string xml;
 		int count = 0;
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
 
 			// Find bucket
-			auto bucketIter = self->buckets.find(bucket);
-			if (bucketIter == self->buckets.end()) {
+			auto bucketIter = getGlobalStorage().buckets.find(bucket);
+			if (bucketIter == getGlobalStorage().buckets.end()) {
 				self->sendError(response, HTTP::HTTP_STATUS_CODE_NOT_FOUND, "NoSuchBucket", "Bucket not found");
 				return Void();
 			}
@@ -718,10 +813,10 @@ public:
 
 		// Thread-safe bucket creation
 		{
-			std::lock_guard<std::mutex> lock(self->storageMutex);
+			std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
 			// Ensure bucket exists in our storage (implicit creation like real S3)
-			if (self->buckets.find(bucket) == self->buckets.end()) {
-				self->buckets[bucket] = std::map<std::string, ObjectData>();
+			if (getGlobalStorage().buckets.find(bucket) == getGlobalStorage().buckets.end()) {
+				getGlobalStorage().buckets[bucket] = std::map<std::string, ObjectData>();
 			}
 		}
 
@@ -743,8 +838,8 @@ public:
 		TraceEvent("MockS3PutBucket").detail("Bucket", bucket);
 
 		// Ensure bucket exists in our storage (implicit creation)
-		if (self->buckets.find(bucket) == self->buckets.end()) {
-			self->buckets[bucket] = std::map<std::string, ObjectData>();
+		if (getGlobalStorage().buckets.find(bucket) == getGlobalStorage().buckets.end()) {
+			getGlobalStorage().buckets[bucket] = std::map<std::string, ObjectData>();
 		}
 
 		response->code = 200;
@@ -847,29 +942,20 @@ public:
 // Global registry to track registered servers and avoid conflicts
 static std::map<std::string, bool> registeredServers;
 
-// Thread-safe singleton storage that avoids destruction order issues
-// Use a static local variable to ensure it's never destroyed
-static MockS3ServerImpl& getSingletonInstance() {
-	static MockS3ServerImpl instance;
-	return instance;
-}
-
-// Clear singleton state for clean test runs
+// Clear global storage state for clean test runs
 static void clearSingletonState() {
-	MockS3ServerImpl& instance = getSingletonInstance();
-	std::lock_guard<std::mutex> lock(instance.storageMutex);
-	instance.buckets.clear();
-	instance.multipartUploads.clear();
+	std::lock_guard<std::mutex> lock(getGlobalStorage().storageMutex);
+	getGlobalStorage().buckets.clear();
+	getGlobalStorage().multipartUploads.clear();
 	TraceEvent("MockS3ServerImpl_StateCleared");
 }
 
-// Request Handler Implementation - Uses singleton to preserve state
+// Request Handler Implementation - Each handler instance works with global storage
 Future<Void> MockS3RequestHandler::handleRequest(Reference<HTTP::IncomingRequest> req,
                                                  Reference<HTTP::OutgoingResponse> response) {
-
-	// Use singleton instance to maintain state across requests while avoiding reference counting
-	MockS3ServerImpl& serverInstance = getSingletonInstance();
-
+	// Create a temporary instance just to use its static handleRequest method
+	// All actual storage is in g_mockS3Storage which is truly global
+	static MockS3ServerImpl serverInstance;
 	return MockS3ServerImpl::handleRequest(&serverInstance, req, response);
 }
 

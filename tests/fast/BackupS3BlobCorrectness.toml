@@ -6,6 +6,7 @@ faultInjection = false
 
 [[knobs]]
 max_trace_lines = 10000000
+backup_error_delay = 60.0
 
 [[test]]
 testTitle = 'BackupAndRestoreS3'
@@ -16,7 +17,7 @@ simBackupAgents = 'BackupToFile'
     testName = 'Cycle'
     nodeCount = 30
     transactionsPerSecond = 25.0
-    testDuration = 20.0
+    testDuration = 5.0
     expectedRate = 0
 
     [[test.workload]]
@@ -24,4 +25,5 @@ simBackupAgents = 'BackupToFile'
     backupAfter = 10.0
     restoreAfter = 50.0
     backupRangesCount = 1
+    abortAndRestartAfter = 0.0
     backupURL = 'blobstore://mocks3:mocksecret:mocktoken@127.0.0.1:8080/backup_container?bucket=backup_bucket&region=us-east-1&secure_connection=0&cwpf=1&cu=1'

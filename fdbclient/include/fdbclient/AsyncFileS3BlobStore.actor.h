@@ -82,7 +82,50 @@ public:
 		PacketWriter writer;
 		int length;
 		void write(const uint8_t* buf, int len) {
-			writer.serializeBytes(buf, len);
+			// CROSS_PROCESS_FIX: Bypass PacketWriter for encrypted chunks to prevent corruption
+			// Encrypted chunks are typically 4KB (ENCRYPTION_BLOCK_SIZE) or smaller partial blocks (e.g., 219 bytes)
+			// Small unencrypted files (e.g., 1-9 byte version properties) should still use PacketWriter
+			if (len >= 256) {
+				// For encrypted content and large data, write directly to UnsentPacketQueue
+				// to avoid PacketWriter corruption issues
+				
+				// CRITICAL: Append to the end of the queue to maintain correct order
+				// (prependWriteBuffer adds to beginning, which reverses order)
+				PacketBuffer* lastBuffer = content.getWriteBuffer(len + 1);
+				if (lastBuffer->bytes_written > 0) {
+					// Current buffer has data, create a new one
+					PacketBuffer* buffer = PacketBuffer::create(len + 1);
+					memcpy(buffer->data(), buf, len);
+					buffer->bytes_written = len;
+					
+					// Link the new buffer to the end
+					lastBuffer->next = buffer;
+					content.setWriteBuffer(buffer);
+					
+					// Debug logging
+					printf("DEBUG_PART_WRITE: len=%d buffer_size=%zu bytes_written=%d first_char=0x%02x last_char=0x%02x NEWBUF process=%s\n",
+					       len, buffer->size(), buffer->bytes_written,
+					       len > 0 ? (unsigned char)buf[0] : 0,
+					       len > 0 ? (unsigned char)buf[len-1] : 0,
+					       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+				} else {
+					// Current buffer is empty, use it directly
+					memcpy(lastBuffer->data(), buf, len);
+					lastBuffer->bytes_written = len;
+					
+					// Debug logging
+					printf("DEBUG_PART_WRITE: len=%d buffer_size=%zu bytes_written=%d first_char=0x%02x last_char=0x%02x SAMEBUF process=%s\n",
+					       len, lastBuffer->size(), lastBuffer->bytes_written,
+					       len > 0 ? (unsigned char)buf[0] : 0,
+					       len > 0 ? (unsigned char)buf[len-1] : 0,
+					       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+				}
+			} else {
+				// For small unencrypted content (< 256 bytes), use the original PacketWriter approach
+				// This includes version property files (1-9 bytes) and other small metadata
+				writer.serializeBytes(buf, len);
+			}
+			
 			if (use_sha256) {
 				::SHA256_Update(&content_sha256_buf, buf, len);
 			} else {
@@ -122,11 +165,24 @@ public:
 
 	ACTOR static Future<Void> write_impl(Reference<AsyncFileS3BlobStoreWrite> f, const uint8_t* data, int length) {
 		state Part* p = f->m_parts.back().getPtr();
+		
+		// Debug logging for large writes
+		if (length > 1000) {
+			printf("DEBUG_WRITE_IMPL: length=%d part_length=%d min_part_size=%d first_char=0x%02x last_char=0x%02x process=%s\n",
+			       length, p->length, f->m_bstore->knobs.multipart_min_part_size,
+			       length > 0 ? (unsigned char)data[0] : 0,
+			       length > 0 ? (unsigned char)data[length-1] : 0,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		// If this write will cause the part to cross the min part size boundary then write to the boundary and start a
 		// new part.
 		while (p->length + length >= f->m_bstore->knobs.multipart_min_part_size) {
 			// Finish off this part
 			int finishlen = f->m_bstore->knobs.multipart_min_part_size - p->length;
+			printf("DEBUG_WRITE_IMPL_SPLIT: finishlen=%d remaining=%d process=%s\n",
+			       finishlen, length - finishlen,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
 			p->write((const uint8_t*)data, finishlen);
 
 			// Adjust source buffer args

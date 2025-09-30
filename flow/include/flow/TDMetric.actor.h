@@ -311,7 +311,23 @@ struct MetricUtil {
 		MetricNameRef mname;
 
 		if (useMap) {
-			mname = MetricNameRef(T::metricType, name, id);
+			// CROSS_PROCESS_FIX: Make metric names process-specific in simulation to prevent cross-process sharing
+			StringRef processSpecificName = name;
+			StringRef processSpecificId = id;
+			
+			if (g_network && g_network->isSimulated()) {
+				// Append process address to metric name to ensure process isolation
+				static thread_local std::string nameBuffer, idBuffer;
+				nameBuffer = format("%s@%s", name.toString().c_str(), g_network->getLocalAddress().toString().c_str());
+				processSpecificName = StringRef((uint8_t*)nameBuffer.c_str(), nameBuffer.size());
+				
+				if (id.size() > 0) {
+					idBuffer = format("%s@%s", id.toString().c_str(), g_network->getLocalAddress().toString().c_str());
+					processSpecificId = StringRef((uint8_t*)idBuffer.c_str(), idBuffer.size());
+				}
+			}
+			
+			mname = MetricNameRef(T::metricType, processSpecificName, processSpecificId);
 			auto mi = collection->metricMap.find(mname);
 			if (mi != collection->metricMap.end()) {
 				m = mi->value.castTo<T>();

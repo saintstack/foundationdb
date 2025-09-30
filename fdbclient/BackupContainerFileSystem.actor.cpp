@@ -57,8 +57,37 @@ public:
 		int64_t size = wait(f->size());
 		state Standalone<StringRef> buf = makeString(size);
 		wait(success(f->read(mutateString(buf), buf.size(), 0)));
+		
+		// BACKUP_DEBUG: Add debug logging for snapshot file reading
+		printf("DEBUG_BACKUP_READ: snapshot_file=%s size=%lld contents='%.*s' process=%s\n",
+		       snapshot.fileName.c_str(), (long long)buf.size(), (int)std::min(100, (int)buf.size()), buf.begin(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
+		// BACKUP_DEBUG: Show full JSON content for debugging
+		std::string jsonStr = buf.toString();
+		printf("DEBUG_JSON_FULL: snapshot_file=%s json_length=%d json_content='%s' process=%s\n",
+		       snapshot.fileName.c_str(), (int)jsonStr.length(), jsonStr.c_str(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		json_spirit::mValue json;
-		if (!json_spirit::read_string(buf.toString(), json)) {
+		if (!json_spirit::read_string(jsonStr, json)) {
+			printf("DEBUG_BACKUP_READ_FAIL: snapshot_file=%s size=%lld json_parse_failed contents_hex=", 
+			       snapshot.fileName.c_str(), (long long)buf.size());
+			for (int i = 0; i < std::min(80, (int)buf.size()); i++) {
+				printf("%02x", (unsigned char)buf.begin()[i]);
+			}
+			printf(" process=%s\n", g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			fflush(stdout);
+			
+			// BACKUP_DEBUG: Try to identify the exact parsing issue
+			printf("DEBUG_JSON_PARSE_DETAILS: first_char=0x%02x last_char=0x%02x string_length=%d buffer_size=%lld process=%s\n",
+			       (unsigned char)jsonStr[0], (unsigned char)jsonStr[jsonStr.length()-1], 
+			       (int)jsonStr.length(), (long long)buf.size(),
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			fflush(stdout);
+			
 			fprintf(stderr,
 			        "ERROR: Failed to read data. Verify that backup and restore encryption keys match (if provided) or "
 			        "the data is corrupted.\n");
@@ -208,10 +237,22 @@ public:
 		wait(yield());
 		state std::string docString = json_spirit::write_string(json);
 
+		// BACKUP_DEBUG: Add debug logging for snapshot metadata writing
+		printf("DEBUG_SNAPSHOT_WRITE: snapshot_file=snapshots/snapshot,%ld,%ld,%ld json_length=%d json_content='%s' process=%s\n",
+		       (long)minVer, (long)maxVer, (long)totalBytes, (int)docString.length(), docString.c_str(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+
 		state Reference<IBackupFile> f =
-		    wait(bc->writeFile(format("snapshots/snapshot,%lld,%lld,%lld", minVer, maxVer, totalBytes)));
+		    wait(bc->writeFile(format("snapshots/snapshot,%ld,%ld,%ld", (long)minVer, (long)maxVer, (long)totalBytes)));
 		wait(f->append(docString.data(), docString.size()));
 		wait(f->finish());
+		
+		// BACKUP_DEBUG: Confirm snapshot metadata write completion
+		printf("DEBUG_SNAPSHOT_WRITE_COMPLETE: snapshot_file=snapshots/snapshot,%ld,%ld,%ld process=%s\n",
+		       (long)minVer, (long)maxVer, (long)totalBytes,
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
 
 		return Void();
 	}
@@ -1569,8 +1610,21 @@ ACTOR static Future<Void> writeVersionProperty(Reference<BackupContainerFileSyst
 	try {
 		state Reference<IBackupFile> f = wait(bc->writeFile(path));
 		std::string s = format("%lld", v);
+		
+		// BACKUP_DEBUG: Add debug logging for version property writing
+		printf("DEBUG_VERSION_WRITE: path=%s version=%ld string='%s' len=%d process=%s\n",
+		       path.c_str(), (long)v, s.c_str(), (int)s.size(),
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		wait(f->append(s.data(), s.size()));
 		wait(f->finish());
+		
+		printf("DEBUG_VERSION_WRITE_COMPLETE: path=%s version=%ld process=%s\n",
+		       path.c_str(), (long)v,
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		fflush(stdout);
+		
 		return Void();
 	} catch (Error& e) {
 		TraceEvent(SevWarn, "BackupContainerWritePropertyFailed")
@@ -1590,7 +1644,9 @@ ACTOR static Future<Optional<Version>> readVersionProperty(Reference<BackupConta
 		int rs = wait(f->read((uint8_t*)s.data(), size, 0));
 		Version v;
 		int len;
-		if (rs == size && sscanf(s.c_str(), "%" SCNd64 "%n", &v, &len) == 1 && len == size)
+		
+		int scanResult = sscanf(s.c_str(), "%" SCNd64 "%n", &v, &len);
+		if (rs == size && scanResult == 1 && len == size)
 			return v;
 
 		TraceEvent(SevWarn, "BackupContainerInvalidProperty").detail("URL", bc->getURL()).detail("Path", path);
@@ -1681,6 +1737,8 @@ Reference<BackupContainerFileSystem> BackupContainerFileSystem::openContainerFS(
     const Optional<std::string>& proxy,
     const Optional<std::string>& encryptionKeyFileName,
     bool isBackup) {
+	// Global cache shared across all processes - this is intentional even in simulation
+	// because multiple processes need to see the same backup container state
 	static std::map<std::string, Reference<BackupContainerFileSystem>> m_cache;
 
 	Reference<BackupContainerFileSystem>& r = m_cache[url];

@@ -52,9 +52,29 @@ public:
 		                                         self->file->read(encrypted,
 		                                                          FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE,
 		                                                          FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE * block))));
+		
+		// Debug logging for block reads
+		if (bytes > 0 && bytes < FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE) {
+			printf("DEBUG_READ_ENCRYPTED_BLOCK: block=%u bytes_read=%d expected=4096 first_encrypted=0x%02x last_encrypted=0x%02x process=%s\n",
+			       block, bytes,
+			       encrypted[0],
+			       encrypted[bytes-1],
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		StreamCipherKey const* cipherKey = StreamCipherKey::getGlobalCipherKey();
 		DecryptionStreamCipher decryptor(cipherKey, self->getIV(block));
 		auto decrypted = decryptor.decrypt(encrypted, bytes, arena);
+		
+		// Debug logging for decryption results
+		if (bytes > 0 && bytes < FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE) {
+			printf("DEBUG_DECRYPTED_BLOCK: block=%u bytes_read=%d decrypted_size=%d first_plain=0x%02x last_plain=0x%02x process=%s\n",
+			       block, bytes, (int)decrypted.size(),
+			       decrypted.size() > 0 ? (unsigned char)decrypted.begin()[0] : 0,
+			       decrypted.size() > 0 ? (unsigned char)decrypted.begin()[decrypted.size()-1] : 0,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		return Standalone<StringRef>(decrypted, arena);
 	}
 
@@ -75,6 +95,14 @@ public:
 		state unsigned char* output = reinterpret_cast<unsigned char*>(data);
 		state int bytesRead = 0;
 		ASSERT(self->mode == AsyncFileEncrypted::Mode::READ_ONLY);
+		
+		// Debug logging for large reads
+		if (length > 10000) {
+			printf("DEBUG_ENCRYPTED_READ: length=%d offset=%lld firstBlock=%u lastBlock=%u process=%s\n",
+			       length, (long long)offset, firstBlock, lastBlock,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		for (block = firstBlock; block <= lastBlock; ++block) {
 			state Standalone<StringRef> plaintext;
 
@@ -101,10 +129,32 @@ public:
 				break;
 			}
 
+			// Debug logging for block reads
+			if (length > 10000) {
+				size_t chunkSize = end - start;
+				printf("DEBUG_DECRYPT_BLOCK: block=%u chunkSize=%zu plaintext_size=%d first_char=0x%02x last_char=0x%02x bytesRead_so_far=%d process=%s\n",
+				       block, chunkSize, plaintext.size(),
+				       chunkSize > 0 ? (unsigned char)start[0] : 0,
+				       chunkSize > 0 ? (unsigned char)start[chunkSize-1] : 0,
+				       bytesRead,
+				       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			}
+
 			std::copy(start, end, output);
 			output += (end - start);
 			bytesRead += (end - start);
 		}
+		
+		// Debug logging for read completion
+		if (length > 10000) {
+			unsigned char* fullOutput = reinterpret_cast<unsigned char*>(data);
+			printf("DEBUG_ENCRYPTED_READ_COMPLETE: bytesRead=%d first_char=0x%02x last_char=0x%02x process=%s\n",
+			       bytesRead,
+			       bytesRead > 0 ? fullOutput[0] : 0,
+			       bytesRead > 0 ? fullOutput[bytesRead-1] : 0,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		return bytesRead;
 	}
 
@@ -113,16 +163,44 @@ public:
 		// All writes must append to the end of the file:
 		ASSERT_EQ(offset, self->currentBlock * FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE + self->offsetInBlock);
 		state unsigned char const* input = reinterpret_cast<unsigned char const*>(data);
+		
+		// Debug logging for large encrypted writes
+		if (length > 10000) {
+			printf("DEBUG_ENCRYPTED_WRITE: length=%d offset=%lld currentBlock=%u offsetInBlock=%d first_char=0x%02x last_char=0x%02x process=%s\n",
+			       length, (long long)offset, self->currentBlock, self->offsetInBlock,
+			       length > 0 ? (unsigned char)input[0] : 0,
+			       length > 0 ? (unsigned char)input[length-1] : 0,
+			       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+		}
+		
 		while (length > 0) {
 			const auto chunkSize = std::min(length, FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE - self->offsetInBlock);
 			Arena arena;
 			auto encrypted = self->encryptor->encrypt(input, chunkSize, arena);
+			
+			// Debug logging for encryption chunks
+			if (length > 10000 || chunkSize > 1000) {
+				printf("DEBUG_ENCRYPT_CHUNK: chunkSize=%d encrypted_size=%d remaining=%d currentBlock=%u first_plain=0x%02x last_plain=0x%02x first_encrypted=0x%02x last_encrypted=0x%02x process=%s\n",
+				       chunkSize, (int)encrypted.size(), length - chunkSize, self->currentBlock,
+				       chunkSize > 0 ? (unsigned char)input[0] : 0,
+				       chunkSize > 0 ? (unsigned char)input[chunkSize-1] : 0,
+				       encrypted.size() > 0 ? (unsigned char)encrypted.begin()[0] : 0,
+				       encrypted.size() > 0 ? (unsigned char)encrypted.begin()[encrypted.size()-1] : 0,
+				       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+			}
+			
 			std::copy(encrypted.begin(), encrypted.end(), &self->writeBuffer[self->offsetInBlock]);
 			offset += encrypted.size();
 			self->offsetInBlock += chunkSize;
 			length -= chunkSize;
 			input += chunkSize;
 			if (self->offsetInBlock == FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE) {
+				// Debug logging for block writes
+				if (length > 10000 || self->currentBlock < 5) {
+					printf("DEBUG_WRITE_BLOCK: currentBlock=%u block_size=%d process=%s\n",
+					       self->currentBlock, FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE,
+					       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+				}
 				wait(self->writeLastBlockToFile());
 				self->offsetInBlock = 0;
 				ASSERT_LT(self->currentBlock, std::numeric_limits<uint32_t>::max());
@@ -229,6 +307,15 @@ StreamCipher::IV AsyncFileEncrypted::getIV(uint32_t block) const {
 }
 
 Future<Void> AsyncFileEncrypted::writeLastBlockToFile() {
+	// Debug logging for partial block writes
+	if (offsetInBlock > 0 && offsetInBlock < FLOW_KNOBS->ENCRYPTION_BLOCK_SIZE) {
+		printf("DEBUG_WRITE_PARTIAL_BLOCK: currentBlock=%u offsetInBlock=%d first_byte=0x%02x last_byte=0x%02x process=%s\n",
+		       currentBlock, offsetInBlock,
+		       offsetInBlock > 0 ? writeBuffer[0] : 0,
+		       offsetInBlock > 0 ? writeBuffer[offsetInBlock-1] : 0,
+		       g_network ? g_network->getLocalAddress().toString().c_str() : "unknown");
+	}
+	
 	// The source buffer for the write is owned by *this so this must be kept alive by reference count until the write
 	// is finished.
 	return uncancellable(

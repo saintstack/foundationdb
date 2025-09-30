@@ -100,6 +100,8 @@ std::string ResponseBase<T>::getCodeDescription() {
 		return "Accepted";
 	} else if (code == HTTP_STATUS_CODE_NO_CONTENT) {
 		return "No Content";
+	} else if (code == HTTP_STATUS_CODE_PARTIAL_CONTENT) {
+		return "Partial Content";
 	} else if (code == HTTP_STATUS_CODE_BAD_REQUEST) {
 		return "Bad Request";
 	} else if (code == HTTP_STATUS_CODE_UNAUTHORIZED) {
