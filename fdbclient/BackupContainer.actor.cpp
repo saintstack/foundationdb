@@ -56,7 +56,7 @@
 namespace IBackupFile_impl {
 
 ACTOR Future<Void> appendStringRefWithLen(Reference<IBackupFile> file, Standalone<StringRef> s) {
-	state uint32_t lenBuf = bigEndian32((uint32_t)s.size());
+	uint32_t lenBuf = bigEndian32((uint32_t)s.size());
 	wait(file->append(&lenBuf, sizeof(lenBuf)));
 	wait(file->append(s.begin(), s.size()));
 	return Void();
@@ -263,9 +263,13 @@ Reference<IBackupContainer> IBackupContainer::openContainer(const std::string& u
                                                             const Optional<std::string>& encryptionKeyFileName) {
 	static std::map<std::string, Reference<IBackupContainer>> m_cache;
 
-	Reference<IBackupContainer>& r = m_cache[url];
-	if (r)
-		return r;
+	// In simulation, skip cache to avoid stale reads
+	Reference<IBackupContainer> r;
+	if (!g_network || !g_network->isSimulated()) {
+		r = m_cache[url];
+		if (r)
+			return r;
+	}
 
 	try {
 		StringRef u(url);
@@ -347,6 +351,12 @@ Reference<IBackupContainer> IBackupContainer::openContainer(const std::string& u
 
 		r->encryptionKeyFileName = encryptionKeyFileName;
 		r->URL = url;
+
+		// Cache the container (only in non-simulation)
+		if (!g_network || !g_network->isSimulated()) {
+			m_cache[url] = r;
+		}
+
 		return r;
 	} catch (Error& e) {
 		if (e.code() == error_code_actor_cancelled)

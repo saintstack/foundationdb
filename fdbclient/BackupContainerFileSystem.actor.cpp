@@ -1681,6 +1681,8 @@ Reference<BackupContainerFileSystem> BackupContainerFileSystem::openContainerFS(
     const Optional<std::string>& proxy,
     const Optional<std::string>& encryptionKeyFileName,
     bool isBackup) {
+	// Global cache shared across all processes - this is intentional even in simulation
+	// because multiple processes need to see the same backup container state
 	static std::map<std::string, Reference<BackupContainerFileSystem>> m_cache;
 
 	Reference<BackupContainerFileSystem>& r = m_cache[url];
