@@ -18,7 +18,8 @@
 #
 FROM docker.io/rockylinux/rockylinux:9.5-minimal AS base
 
-RUN microdnf install -y \
+RUN microdnf update -y && \
+    microdnf install -y \
     --setopt=timeout=180 \
     --setopt=retries=5 \
     bind-utils \
@@ -159,7 +160,8 @@ FROM foundationdb-base AS foundationdb-kubernetes-sidecar
 # with the installed openssl version. Since the sidecar support will be deprecated in the
 # future it's fine to use python 3.9 here.
 # EOL for python 3.9 is 2025-10: https://devguide.python.org/versions/
-RUN microdnf -y install \
+RUN microdnf update -y && \
+    microdnf -y install \
     --setopt=timeout=180 \
     --setopt=retries=5 \
     python3.9 \
@@ -205,7 +207,8 @@ ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/var/fdb/scripts/fdb.bash"]
 
 FROM foundationdb-base AS ycsb
 
-RUN microdnf -y install \
+RUN microdnf update -y && \
+    microdnf -y install \
     --setopt=timeout=180 \
     --setopt=retries=5 \
     java-11-openjdk java-11-openjdk-devel && \
