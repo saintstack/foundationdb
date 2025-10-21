@@ -1,15 +1,5 @@
 # Test configuration for S3Client workload
 # This test verifies that the S3 client can upload, download, and delete a file to an S3 bucket.
-# Requires local instance of seaweedfs up and running and the below s3Url pointing at it.
-# One way to do this is:
-# source foundationdb/fdbclient/tests/seaweeds_fixture.sh
-#  mkdir ~/weed
-#  run_weed ~/weed/ ~/weed/
-# After the server comes up it will output where the service is running, something like
-# localhost:8335. Use this input composing the s3url below (use '127.0.0.1' in place of 'localhost').
-#  ...
-# When done, run:
-#  shutdown_weed ~/weed
 
 # Disable all fault injection and network failures
 # buggify = false now controls ALL fault injection systems (BUGGIFY, failure workloads, AND global fault injection)

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
 # Mock S3 Server fixture for ctests
-# Replaces SeaweedFS with in-process MockS3Server
 #
 # Usage:
 #   1. Source this script:

@@ -37,7 +37,7 @@ function run_s3client {
   local cmd_args=()
   cmd_args+=("${s3client}")
   cmd_args+=("--knob_http_verbose_level=${HTTP_VERBOSE_LEVEL}")
-  # Only use AWS KMS encryption with real S3, not SeaweedFS
+  # Only use AWS KMS encryption with real S3, not mocks3
   if [[ "${USE_S3}" == "true" ]]; then
     cmd_args+=("--knob_blobstore_encryption_type=aws:kms")
   fi
@@ -96,21 +96,16 @@ function upload_download {
   if [[ ! -d "${logsdir}" ]]; then
     mkdir "${logsdir}"
   fi
-  # If on s3, enable integrity check. Otherwise leave it false.
-  # (seaweed doesn't support asking for hash in GET request so
-  # it fails the request as malformed).
   local integrity_check=false
-  if [[ "${USE_S3}" == "true" ]]; then
-    # Enable integrity checking unless an override.
-    if [[ "${no_integrity_check}" == false ]]; then
-      integrity_check=true
-    fi
-    # Run this rm only if s3. In seaweed, it would fail because
-    # bucket doesn't exist yet (they are lazily created).
-    if ! run_s3client "${s3client}" "${credentials}" "${logsdir}" "${integrity_check}" rm "${url}"; then
-      err "Failed rm of ${url}"
-      return 1
-    fi
+  # Enable integrity checking unless an override.
+  if [[ "${no_integrity_check}" == false ]]; then
+    integrity_check=true
+  fi
+  # Run this rm only if s3. In mocks3, it would fail because
+  # bucket doesn't exist yet (they are lazily created).
+  if ! run_s3client "${s3client}" "${credentials}" "${logsdir}" "${integrity_check}" rm "${url}"; then
+    err "Failed rm of ${url}"
+    return 1
   fi
   if ! run_s3client "${s3client}" "${credentials}" "${logsdir}" "${integrity_check}" cp "${object}" "${url}"; then
     err "Failed cp of ${object} to ${url}"
@@ -150,7 +145,6 @@ function test_file_upload_and_download {
 }
 
 # Test file upload and download but w/o the integrity check.
-# Only makes sense on s3. Seaweed doesn't support integrity check.
 # $1 The url to go against
 # $2 Directory I can write test files in.
 # $3 credentials file
@@ -223,7 +217,7 @@ function test_nonexistent_bucket {
       return 1
     fi
   else
-    # For SeaweedFS, expect either:
+    # For mocks3, expect either:
     # 1. "No objects found" message
     # 2. Just the header line
     # 3. Or successful completion with no objects listed
@@ -236,7 +230,7 @@ function test_nonexistent_bucket {
     # Check if command succeeded and output matches expected patterns
     if [[ ${status} -eq 0 ]]; then
       # Command succeeded, check output patterns
-      # For SeaweedFS, we consider it a success if:
+      # For mocks3, we consider it a success if:
       # 1. The command succeeded (status 0)
       # 2. The output contains the URL header
       # 3. There are no objects listed (no lines after the header)
@@ -245,12 +239,12 @@ function test_nonexistent_bucket {
         # Success - we have the header and no other non-empty lines (excluding HTTP debug lines)
         return 0
       else
-        err "Failed to handle empty bucket listing in SeaweedFS"
+        err "Failed to handle empty bucket listing in mocks3"
         return 1
       fi
     else
-      # Command failed, which is unexpected for SeaweedFS
-      err "Command failed unexpectedly for SeaweedFS"
+      # Command failed, which is unexpected for mocks3
+      err "Command failed unexpectedly for mocks3"
       return 1
     fi
   fi
@@ -289,11 +283,11 @@ function test_nonexistent_resource {
       return 1
     fi
   else
-    # For SeaweedFS, expect either:
+    # For mocks3, expect either:
     # 1. Empty listing (just the header line)
     # 2. Or successful completion with no objects listed
     if [[ ${status} -eq 0 ]]; then
-      # For SeaweedFS, we consider it a success if:
+      # For mocks3, we consider it a success if:
       # 1. The command succeeded (status 0)
       # 2. The output contains the URL header
       # 3. There are no actual object listings (no lines starting with FILE or DIR)
@@ -302,12 +296,12 @@ function test_nonexistent_resource {
         # Success - we have the header and no object listings
         return 0
       else
-        err "Failed to handle non-existent resource in SeaweedFS"
+        err "Failed to handle non-existent resource in mocks3"
         return 1
       fi
     else
-      # Command failed, which is unexpected for SeaweedFS
-      err "Command failed unexpectedly for SeaweedFS"
+      # Command failed, which is unexpected for mocks3
+      err "Command failed unexpectedly for mocks3"
       return 1
     fi
   fi
@@ -579,7 +573,7 @@ readonly HTTP_VERBOSE_LEVEL=2
 # internal apple dev environments where S3 is available).
 readonly USE_S3="${USE_S3:-$( if [[ -n "${OKTETO_NAMESPACE+x}" ]]; then echo "true" ; else echo "false"; fi )}"
 
-# Set TLS_CA_FILE only when using real S3, not for SeaweedFS
+# Set TLS_CA_FILE only when using real S3, not for mocks3
 if [[ "${USE_S3}" == "true" ]]; then
   # Try to find a valid TLS CA file if not explicitly set
   if [[ -z "${TLS_CA_FILE:-}" ]]; then
@@ -593,7 +587,7 @@ if [[ "${USE_S3}" == "true" ]]; then
   fi
   TLS_CA_FILE="${TLS_CA_FILE:-}"
 else
-  # For SeaweedFS, don't use TLS
+  # For mocks3, don't use TLS
   TLS_CA_FILE=""
 fi
 readonly TLS_CA_FILE
@@ -680,7 +674,7 @@ if (( $# == 2 )); then
 fi
 readonly scratch_dir
 
-# Set host, bucket, and blob_credentials_file whether seaweed or s3.
+# Set host, bucket, and blob_credentials_file
 query_str=
 path_prefix=
 

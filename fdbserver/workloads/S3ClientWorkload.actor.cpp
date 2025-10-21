@@ -84,7 +84,7 @@ private:
 		// Write the credentials file content -- hardcoded and nonsense for now. It just needs to be present.
 		writeFile(
 		    credentials,
-		    "{\"accounts\":{\"@host\":{\"api_key\":\"seaweedfs\",\"secret\":\"tot4llys3cure\",\"token\":\"TOKEN\"}}}");
+		    "{\"accounts\":{\"@host\":{\"api_key\":\"mocks3\",\"secret\":\"tot4llys3cure\",\"token\":\"TOKEN\"}}}");
 
 		// Set the credentials file path into the global network configuration
 		auto* blobCredFiles = (std::vector<std::string>*)g_network->global(INetwork::enBlobCredentialFiles);

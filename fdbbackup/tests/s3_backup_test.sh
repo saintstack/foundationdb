@@ -439,7 +439,7 @@ if (( $# < 2 )) || (( $# > 3 )); then
     echo "CMAKE_SOURCE_DIR and CMAKE_BINARY_DIR -- and then, optionally,"
     echo "a directory into which we write scratch test data and logs"
     echo "(otherwise we will write to subdirs under $TMPDIR). We will"
-    echo "leave the download of seaweed this directory for other"
+    echo "leave the download of mocks3 this directory for other"
     echo "tests to find if they need it. Otherwise, we clean everything"
     echo "else up on our way out."
     echo "Example: ${0} ./foundationdb ./build_output ./scratch_dir [--encrypt]"

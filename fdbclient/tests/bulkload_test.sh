@@ -197,7 +197,7 @@ function test_basic_bulkdump_and_bulkload {
     return 1
   fi
   if [[ "${USE_S3}" == "true" ]]; then
-    # Run this rm only if s3. In seaweed, it would fail because
+    # Run this rm only if s3. In mocks3, it would fail because
     # bucket doesn't exist yet (they are lazily created).
     if ! "${local_build_dir}/bin/s3client" \
         "${KNOBS[*]}" \
@@ -262,7 +262,7 @@ else
 fi
 readonly KNOBS
 
-# Set TLS_CA_FILE only when using real S3, not for SeaweedFS or MockS3Server
+# Set TLS_CA_FILE only when using real S3, not for mocks3
 if [[ "${USE_S3}" == "true" ]]; then
   # Try to find a valid TLS CA file if not explicitly set
   if [[ -z "${TLS_CA_FILE:-}" ]]; then
@@ -276,7 +276,7 @@ if [[ "${USE_S3}" == "true" ]]; then
   fi
   TLS_CA_FILE="${TLS_CA_FILE:-}"
 else
-  # For SeaweedFS and MockS3Server, don't use TLS
+  # For mocks3, don't use TLS
   TLS_CA_FILE=""
 fi
 readonly TLS_CA_FILE
@@ -307,7 +307,7 @@ if (( $# < 2 )) || (( $# > 3 )); then
     echo "CMAKE_SOURCE_DIR and CMAKE_BINARY_DIR -- and then, optionally,"
     echo "a directory into which we write scratch test data and logs"
     echo "\(otherwise we will write to subdirs under $TMPDIR\). We will"
-    echo "leave the download of seaweed in this directory for other"
+    echo "leave the download of mocks3 in this directory for other"
     echo "tests to find if they need it (if we need to download it)."
     echo "Otherwise, we clean everything else up on our way out."
     echo "Example: ${0} ./foundationdb ./build_output ./scratch_dir"
@@ -329,7 +329,7 @@ if (( $# == 3 )); then
 fi
 readonly scratch_dir
 
-# Set host, bucket, and blob_credentials_file whether seaweed or s3.
+# Set host, bucket, and blob_credentials_file
 readonly path_prefix="bulkload/ctests"
 host=
 query_str=
