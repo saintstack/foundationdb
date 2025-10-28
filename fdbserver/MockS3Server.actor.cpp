@@ -122,7 +122,9 @@ struct MockS3GlobalStorage {
 
 	// Note: In FDB simulation, function-local statics are SHARED across all simulated processes
 	// because they all run on the same OS thread. This is exactly what we want for MockS3 storage.
-	MockS3GlobalStorage() { TraceEvent("MockS3GlobalStorageCreated").detail("Address", format("%p", this)); }
+	MockS3GlobalStorage() {
+		// Note: Don't use TraceEvent in constructor - may be called before GlobalConfig is initialized
+	}
 
 	// Clear all stored data - called at the start of each simulation test to prevent
 	// data accumulation across multiple tests
@@ -140,10 +142,8 @@ struct MockS3GlobalStorage {
 		persistenceEnabled = true;
 		persistenceLoaded = false;
 
-		TraceEvent("MockS3PersistenceEnabled")
-		    .detail("Directory", dir)
-		    .detail("Address", format("%p", this))
-		    .detail("UsingSimulationFS", g_network->isSimulated());
+		// Note: Don't use TraceEvent here - may be called before GlobalConfig is initialized
+		// TraceEvent during explicit registration (initializeMockS3Persistence) is safe
 	}
 
 	// Get paths for persistence files
@@ -377,7 +377,7 @@ ACTOR static Future<Void> persistObject(std::string bucket, std::string object) 
 	// In simulation, automatically enable persistence on first access (process-local storage)
 	if (!storage.persistenceEnabled && g_network->isSimulated()) {
 		storage.enablePersistence(DEFAULT_MOCKS3_PERSISTENCE_DIR);
-		TraceEvent("MockS3PersistenceAutoEnabled").detail("Bucket", bucket).detail("Object", object);
+		// Note: Don't use TraceEvent here - may be called before GlobalConfig is initialized
 	}
 
 	if (!storage.persistenceEnabled) {
@@ -437,7 +437,7 @@ ACTOR static Future<Void> persistMultipartState(std::string uploadId) {
 	// In simulation, automatically enable persistence on first access (process-local storage)
 	if (!storage.persistenceEnabled && g_network->isSimulated()) {
 		storage.enablePersistence(DEFAULT_MOCKS3_PERSISTENCE_DIR);
-		TraceEvent("MockS3PersistenceAutoEnabled").detail("UploadId", uploadId);
+		// Note: Don't use TraceEvent here - may be called before GlobalConfig is initialized
 	}
 
 	if (!storage.persistenceEnabled) {
@@ -570,9 +570,10 @@ public:
 	using ObjectData = MockS3GlobalStorage::ObjectData;
 	using MultipartUpload = MockS3GlobalStorage::MultipartUpload;
 
-	MockS3ServerImpl() { TraceEvent("MockS3ServerImpl_Constructor").detail("Address", format("%p", this)); }
+	// Note: No TraceEvent here - constructor called before GlobalConfig is initialized
+	MockS3ServerImpl() {}
 
-	~MockS3ServerImpl() { TraceEvent("MockS3ServerImpl_Destructor").detail("Address", format("%p", this)); }
+	~MockS3ServerImpl() {}
 
 	// S3 Operation Handlers
 	ACTOR static Future<Void> handleRequest(MockS3ServerImpl* self,
