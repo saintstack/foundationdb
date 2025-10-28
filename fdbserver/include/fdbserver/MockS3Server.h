@@ -73,6 +73,10 @@ Future<Void> registerMockS3Server(std::string ip, std::string port);
 // Creates directory structure: <persistenceDir>/objects/<bucket>/ and <persistenceDir>/multipart/
 void enableMockS3Persistence(const std::string& persistenceDir);
 
+// Initialize MockS3 persistence (enables persistence and loads persisted state if present)
+// Used by both regular MockS3Server and MockS3ServerChaos during registration
+Future<Void> initializeMockS3Persistence(std::string const& serverKey);
+
 // Process a Mock S3 request directly (for wrapping/chaos injection)
 // This is the low-level request processor used by MockS3RequestHandler
 Future<Void> processMockS3Request(Reference<HTTP::IncomingRequest> req, Reference<HTTP::OutgoingResponse> response);

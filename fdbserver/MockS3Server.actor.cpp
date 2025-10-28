@@ -71,8 +71,9 @@
  *   }
  */
 
-// MockS3 persistence file extensions
+// MockS3 persistence file extensions and constants
 namespace {
+constexpr const char* DEFAULT_MOCKS3_PERSISTENCE_DIR = "simfdb/mocks3";
 constexpr const char* OBJECT_DATA_SUFFIX = ".data";
 constexpr const char* OBJECT_META_SUFFIX = ".meta.json";
 constexpr const char* MULTIPART_STATE_SUFFIX = ".state.json";
@@ -372,7 +373,16 @@ static std::string serializePartMeta(const std::string& etag) {
 // ACTOR: Persist object data and metadata
 ACTOR static Future<Void> persistObject(std::string bucket, std::string object) {
 	auto& storage = getGlobalStorage();
-	ASSERT(storage.persistenceEnabled); // Caller should check before calling
+
+	// In simulation, automatically enable persistence on first access (process-local storage)
+	if (!storage.persistenceEnabled && g_network->isSimulated()) {
+		storage.enablePersistence(DEFAULT_MOCKS3_PERSISTENCE_DIR);
+		TraceEvent("MockS3PersistenceAutoEnabled").detail("Bucket", bucket).detail("Object", object);
+	}
+
+	if (!storage.persistenceEnabled) {
+		return Void(); // Persistence not enabled, skip
+	}
 
 	auto bucketIter = storage.buckets.find(bucket);
 	if (bucketIter == storage.buckets.end()) {
@@ -423,7 +433,16 @@ ACTOR static Future<Void> persistMultipartState(std::string uploadId) {
 	state std::map<int, std::pair<std::string, std::string>> parts;
 
 	auto& storage = getGlobalStorage();
-	ASSERT(storage.persistenceEnabled); // Caller should check before calling
+
+	// In simulation, automatically enable persistence on first access (process-local storage)
+	if (!storage.persistenceEnabled && g_network->isSimulated()) {
+		storage.enablePersistence(DEFAULT_MOCKS3_PERSISTENCE_DIR);
+		TraceEvent("MockS3PersistenceAutoEnabled").detail("UploadId", uploadId);
+	}
+
+	if (!storage.persistenceEnabled) {
+		return Void(); // Persistence not enabled, skip
+	}
 
 	auto uploadIter = storage.multipartUploads.find(uploadId);
 	if (uploadIter == storage.multipartUploads.end()) {
@@ -756,7 +775,7 @@ public:
 			}
 		}
 
-		std::string uploadId;
+		state std::string uploadId;
 		if (!existingUploadId.empty()) {
 			uploadId = existingUploadId;
 		} else {
@@ -1124,6 +1143,12 @@ public:
 			pw.serializeBytes(responseContent);
 			pw.finish();
 		}
+
+		TraceEvent("MockS3GetObjectComplete")
+		    .detail("Bucket", bucket)
+		    .detail("Object", object)
+		    .detail("ResponseCode", response->code)
+		    .detail("ResponseSize", responseContent.size());
 
 		return Void();
 	}
@@ -1521,17 +1546,7 @@ ACTOR Future<Void> registerMockS3Server_impl(std::string ip, std::string port) {
 		registeredServers[serverKey] = true;
 
 		// Enable persistence automatically for all MockS3 instances
-		// This ensures all tests using MockS3 get persistence enabled
-		if (!getGlobalStorage().persistenceEnabled) {
-			std::string persistenceDir = "simfdb/mocks3";
-			enableMockS3Persistence(persistenceDir);
-			TraceEvent("MockS3ServerPersistenceEnabled")
-			    .detail("Address", serverKey)
-			    .detail("PersistenceDir", persistenceDir);
-
-			// Load any previously persisted state (for crash recovery in simulation)
-			wait(loadMockS3PersistedStateFuture());
-		}
+		wait(initializeMockS3Persistence(serverKey));
 
 		TraceEvent("MockS3ServerRegistered").detail("Address", serverKey).detail("Success", true);
 
@@ -1782,6 +1797,20 @@ ACTOR static Future<Void> loadMockS3PersistedStateImpl() {
 Future<Void> loadMockS3PersistedStateFuture() {
 	if (getGlobalStorage().persistenceEnabled && !getGlobalStorage().persistenceLoaded) {
 		return loadMockS3PersistedStateImpl();
+	}
+	return Void();
+}
+
+// Initialize MockS3 persistence for simulation tests (exported for MockS3ServerChaos)
+ACTOR Future<Void> initializeMockS3Persistence(std::string serverKey) {
+	if (!getGlobalStorage().persistenceEnabled) {
+		enableMockS3Persistence(DEFAULT_MOCKS3_PERSISTENCE_DIR);
+		TraceEvent("MockS3ServerPersistenceEnabled")
+		    .detail("Address", serverKey)
+		    .detail("PersistenceDir", DEFAULT_MOCKS3_PERSISTENCE_DIR);
+
+		// Load any previously persisted state (for crash recovery in simulation)
+		wait(loadMockS3PersistedStateFuture());
 	}
 	return Void();
 }
@@ -2066,9 +2095,9 @@ ACTOR Future<Void> startMockS3ServerReal_impl(NetworkAddress listenAddress, std:
 
 	// Enable persistence for standalone MockS3Server
 	if (!getGlobalStorage().persistenceEnabled) {
-		// Use provided persistence directory or default to "simfdb/mocks3"
+		// Use provided persistence directory or default
 		if (persistenceDir.empty()) {
-			persistenceDir = "simfdb/mocks3";
+			persistenceDir = DEFAULT_MOCKS3_PERSISTENCE_DIR;
 		}
 		enableMockS3Persistence(persistenceDir);
 		TraceEvent("MockS3ServerRealPersistenceEnabled")
