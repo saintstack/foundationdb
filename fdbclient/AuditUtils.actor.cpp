@@ -45,6 +45,8 @@ void clearAuditProgressMetadata(Transaction* tr, AuditType auditType, UID auditI
 		tr->clear(auditRangeBasedProgressRangeFor(auditType, auditId));
 	} else if (auditType == AuditType::ValidateLocationMetadata) {
 		tr->clear(auditRangeBasedProgressRangeFor(auditType, auditId));
+	} else if (auditType == AuditType::ValidateRestore) {
+		tr->clear(auditRangeBasedProgressRangeFor(auditType, auditId));
 	} else {
 		UNREACHABLE();
 	}
@@ -669,7 +671,7 @@ ACTOR Future<bool> checkAuditProgressCompleteByRange(Database cx,
                                                      UID auditId,
                                                      KeyRange auditRange) {
 	ASSERT(auditType == AuditType::ValidateHA || auditType == AuditType::ValidateReplica ||
-	       auditType == AuditType::ValidateLocationMetadata);
+	       auditType == AuditType::ValidateLocationMetadata || auditType == AuditType::ValidateRestore);
 	state KeyRange rangeToRead = auditRange;
 	state Key rangeToReadBegin = auditRange.begin;
 	state int retryCount = 0;

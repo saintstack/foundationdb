@@ -51,6 +51,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 	bool shouldSkipRestoreRanges;
 	bool defaultBackup;
 	Optional<std::string> encryptionKeyFileName;
+	Key addPrefix; // Prefix to add to keys during restore (for restore validation)
+	Key removePrefix; // Prefix to remove from keys during restore
 
 	// This workload is not compatible with RandomRangeLock workload because they will race in locked range
 	void disableFailureInjectionWorkloads(std::set<std::string>& out) const override {
@@ -96,6 +98,15 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 		if (getOption(options, "encrypted"_sr, deterministicRandom()->random01() < 0.5)) {
 			encryptionKeyFileName = "simfdb/" + getTestEncryptionFileName();
 		}
+
+		// Support for restore with prefix (e.g., for restore validation)
+		addPrefix = getOption(options, "addPrefix"_sr, ""_sr);
+		removePrefix = getOption(options, "removePrefix"_sr, ""_sr);
+		TraceEvent("BARW_PrefixOptions")
+		    .detail("AddPrefixSize", addPrefix.size())
+		    .detail("AddPrefix", printable(addPrefix))
+		    .detail("RemovePrefixSize", removePrefix.size())
+		    .detail("RemovePrefix", printable(removePrefix));
 
 		TraceEvent("BARW_ClientId").detail("Id", wcx.clientId);
 		UID randomID = nondeterministicRandom()->randomUniqueID();
@@ -496,7 +507,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 		}
 
 		// Try doing a restore without clearing the keys
-		if (rowCount > 0) {
+		// Skip this test if addPrefix is being used, as prefixed restore can coexist with existing data
+		if (rowCount > 0 && self->addPrefix.size() == 0) {
 			try {
 				wait(success(backupAgent->restore(cx,
 				                                  cx,
@@ -677,12 +689,15 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 					                         lastBackupContainer->getEncryptionKeyFileName()));
 				}
 
-				wait(runRYWTransaction(cx, [=](Reference<ReadYourWritesTransaction> tr) -> Future<Void> {
-					tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
-					for (auto& kvrange : self->backupRanges)
-						tr->clear(kvrange);
-					return Void();
-				}));
+				// Skip clearing keys if addPrefix is set, since we want to keep original data for validation
+				if (self->addPrefix.size() == 0) {
+					wait(runRYWTransaction(cx, [=](Reference<ReadYourWritesTransaction> tr) -> Future<Void> {
+						tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+						for (auto& kvrange : self->backupRanges)
+							tr->clear(kvrange);
+						return Void();
+					}));
+				}
 
 				// restore database
 				TraceEvent("BARW_Restore", randomID)
@@ -756,8 +771,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 						                                       targetVersion,
 						                                       Verbose::True,
 						                                       range,
-						                                       Key(),
-						                                       Key(),
+						                                       self->addPrefix,
+						                                       self->removePrefix,
 						                                       self->locked,
 						                                       OnlyApplyMutationLogs::False,
 						                                       InconsistentSnapshotOnly::False,
@@ -780,8 +795,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 					                                       WaitForComplete::True,
 					                                       targetVersion,
 					                                       Verbose::True,
-					                                       Key(),
-					                                       Key(),
+					                                       self->addPrefix,
+					                                       self->removePrefix,
 					                                       self->locked,
 					                                       UnlockDB::True,
 					                                       OnlyApplyMutationLogs::False,
@@ -814,8 +829,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 							                        WaitForComplete::True,
 							                        ::invalidVersion,
 							                        Verbose::True,
-							                        Key(),
-							                        Key(),
+							                        self->addPrefix,
+							                        self->removePrefix,
 							                        self->locked,
 							                        UnlockDB::True,
 							                        OnlyApplyMutationLogs::False,
@@ -847,8 +862,8 @@ struct BackupAndRestoreCorrectnessWorkload : TestWorkload {
 								                        ::invalidVersion,
 								                        Verbose::True,
 								                        self->restoreRanges[restoreIndex],
-								                        Key(),
-								                        Key(),
+								                        self->addPrefix,
+								                        self->removePrefix,
 								                        self->locked,
 								                        OnlyApplyMutationLogs::False,
 								                        InconsistentSnapshotOnly::False,

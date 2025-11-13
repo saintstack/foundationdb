@@ -1,0 +1,64 @@
+# RestoreValidation_Simple.toml
+#
+# Simplified restore validation test without chaos/attrition
+# Tests the basic functionality of comparing restored data with source data
+#
+# IMPORTANT: The addPrefix parameter MUST match the hardcoded prefix in the audit code.
+# Currently, the audit validation expects restored data at: 'restored/'
+# If you change addPrefix below, validation will fail with "all keys missing".
+#
+# This test:
+# 1. Writes test data to normal keys
+# 2. Creates a backup
+# 3. Restores with prefix 'restored/' (REQUIRED for validation to work)
+# 4. Triggers audit validation which compares original vs restored data
+
+testClass = "Backup"
+
+[configuration]
+# Use simple configuration for faster test
+config = 'single'
+
+[[knobs]]
+# Enable restore validation knobs for this test
+restore_validation_enabled = 1
+restore_validation = 1
+
+[[test]]
+testTitle = 'RestoreValidationSimple'
+clearAfterTest = false
+simBackupAgents = 'BackupToFile'
+timeout = 600
+# Don't run consistency check since we have data at two prefixes
+runConsistencyCheck = false
+
+    [[test.workload]]
+    testName = 'Cycle'
+    nodeCount = 5000
+    transactionsPerSecond = 500.0
+    testDuration = 15.0
+    expectedRate = 0
+
+    [[test.workload]]
+    testName = 'BackupAndRestoreCorrectness'
+    backupAfter = 10.0
+    restoreAfter = 60.0
+    performRestore = true
+    backupRangesCount = 1
+    # Restore prefix for validation
+    # Use 'restored/' for simulation tests (TOML cannot encode binary prefixes)
+    # For production/CLI: use '\xff\x02/rlog/' instead
+    # The audit code automatically detects which prefix has data
+    addPrefix = 'restored/'
+    # Don't abort and restart during backup (we want clean backup/restore for validation)
+    abortAndRestartAfter = 0
+    stopDifferentialAfter = 0
+
+    [[test.workload]]
+    testName = 'RestoreValidation'
+    validateAfter = 70.0
+    expectedPhase = 2  # AuditPhase::Complete
+    expectSuccess = true
+    checkInterval = 5.0
+    maxWaitTime = 300.0
+

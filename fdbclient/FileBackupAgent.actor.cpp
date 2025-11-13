@@ -4277,7 +4277,7 @@ struct RestoreCompleteTaskFunc : RestoreTaskFuncBase {
 
 		wait(taskBucket->finish(tr, task));
 
-		if (unlockDB) {
+		if (unlockDB && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
 			wait(unlockDatabase(tr, restore.getUid()));
 		}
 
@@ -6151,7 +6151,9 @@ ACTOR Future<ERestoreState> abortRestore(Reference<ReadYourWritesTransaction> tr
 	// Cancel the backup tasks on this tag
 	wait(tag.cancel(tr));
 
-	wait(unlockDatabase(tr, current.get().first));
+	if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+		wait(unlockDatabase(tr, current.get().first));
+	}
 	return ERestoreState::ABORTED;
 }
 
@@ -6615,7 +6617,9 @@ public:
 
 		if (unlockDB) {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBStart", randomUID);
-			wait(unlockDatabase(cx, randomUID));
+			if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+				wait(unlockDatabase(cx, randomUID));
+			}
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBFinish", randomUID);
 		} else {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("DBLeftLockedAfterRestore", randomUID);
@@ -6984,7 +6988,8 @@ public:
 				                                .removePrefix(removePrefix)
 				                                .withPrefix(addPrefix);
 				RangeResult existingRows = wait(tr->getRange(restoreIntoRange, 1));
-				if (existingRows.size() > 0) {
+				if (existingRows.size() > 0 && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED &&
+				    !CLIENT_KNOBS->RESTORE_VALIDATION) {
 					throw restore_destination_not_empty();
 				}
 			}
@@ -7834,7 +7839,9 @@ public:
 			// If addPrefix or removePrefix set, we want to transform the effect by copying data
 			if (hasPrefix) {
 				wait(transformRestoredDatabase(cx, ranges, addPrefix, removePrefix));
-				wait(unlockDatabase(cx, randomUid));
+				if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+					wait(unlockDatabase(cx, randomUid));
+				}
 			}
 			return -1;
 		} else {

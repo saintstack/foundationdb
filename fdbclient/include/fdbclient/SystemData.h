@@ -629,6 +629,10 @@ extern const KeyRef backupLatestVersionsPrefix;
 // Key range reserved by backup agent to storing mutations
 extern const KeyRangeRef backupLogKeys;
 extern const KeyRangeRef applyLogKeys;
+// Key range reserved for restore validation data storage (production)
+extern const KeyRangeRef restoreLogKeys;
+// Alternative key range for restore validation (simulation tests)
+extern const KeyRangeRef restoreLogKeysSimulation;
 // Returns true if m is a blog (backup log) or alog (apply log) mutation
 bool isBackupLogMutation(const MutationRef& m);
 

@@ -4485,6 +4485,385 @@ ACTOR Future<Void> auditStorageServerShardQ(StorageServer* data, AuditStorageReq
 	return Void();
 }
 
+/*
+ * RESTORE VALIDATION FEATURE - How to Use
+ *
+ * This feature validates that restored backup data matches the original source data
+ * by comparing them within the same cluster.
+ *
+ * === WORKFLOW ===
+ *
+ * Step 1: Backup
+ *   $ fdbbackup start -C <cluster> -d <backup_url> -z
+ *   $ fdbbackup discontinue -C <cluster>
+ *   $ fdbbackup wait -C <cluster>
+ *
+ * Step 2: Restore to Validation Prefix
+ *   Production:
+ *   $ fdbbackup restore -C <cluster> -r <backup_url> \
+ *       --add-prefix "\xff\x02/rlog/" --wait-for-done
+ *
+ *   Simulation Tests (use in TOML configs):
+ *     addPrefix = 'restored/'
+ *
+ * Step 3: Validate
+ *   $ fdbcli -C <cluster>
+ *   fdb> audit_storage validate_restore "" "\xff"
+ *   # Returns Audit ID
+ *   fdb> get_audit_status validate_restore id <AuditID>
+ *
+ * Step 4: Cleanup
+ *   fdb> option on ACCESS_SYSTEM_KEYS
+ *   fdb> writemode on
+ *   fdb> clearrange "\xff\x02/rlog/" "\xff\x02/rlog0"
+ *   # Or for simulation: clearrange "restored/" "restored0"
+ *
+ * === REQUIRED KNOBS ===
+ *   --knob-RESTORE_VALIDATION_ENABLED=1  # Prevents auto-unlock after restore
+ *   --knob-RESTORE_VALIDATION=1          # Bypasses empty cluster check
+ *
+ * === DUAL PREFIX SUPPORT ===
+ * This implementation supports TWO restore prefixes:
+ *   1. restoreLogKeys (\xff\x02/rlog/) - for production/CLI usage
+ *   2. restoreLogKeysSimulation (restored/) - for simulation tests
+ * The audit code automatically detects which prefix has data and uses it.
+ */
+
+// Helper: Read both source and restored data for a given range
+//
+// IMPORTANT: This function looks for restored data at EITHER:
+//   1. restoreLogKeys (\xff\x02/rlog/) - for production/CLI usage
+//   2. restoreLogKeysSimulation (restored/) - for simulation tests
+// The function tries the primary prefix first, then falls back to simulation prefix if empty.
+ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSourceAndRestoredData(StorageServer* data,
+                                                                                                KeyRange rangeToRead,
+                                                                                                Version version,
+                                                                                                int limit,
+                                                                                                int limitBytes) {
+	// Try primary prefix first (production system key space), then fall back to simulation prefix
+	state KeyRange restoredRange = KeyRangeRef(rangeToRead.begin.withPrefix(restoreLogKeys.begin),
+	                                           rangeToRead.end.withPrefix(restoreLogKeys.begin));
+	state KeyRange restoredRangeSimulation = KeyRangeRef(rangeToRead.begin.withPrefix(restoreLogKeysSimulation.begin),
+	                                                     rangeToRead.end.withPrefix(restoreLogKeysSimulation.begin));
+	state bool useSimulationPrefix = false;
+
+	// Read source data from user key range
+	GetKeyValuesRequest sourceReq;
+	sourceReq.begin = firstGreaterOrEqual(rangeToRead.begin);
+	sourceReq.end = firstGreaterOrEqual(rangeToRead.end);
+	sourceReq.limit = limit;
+	sourceReq.limitBytes = limitBytes;
+	sourceReq.version = version;
+	sourceReq.tags = TagSet();
+	data->actors.add(getKeyValuesQ(data, sourceReq));
+	state Future<ErrorOr<GetKeyValuesReply>> sourceFuture = errorOr(sourceReq.reply.getFuture());
+
+	// Try primary prefix first
+	GetKeyValuesRequest restoredReq;
+	restoredReq.begin = firstGreaterOrEqual(restoredRange.begin);
+	restoredReq.end = firstGreaterOrEqual(restoredRange.end);
+	restoredReq.limit = limit;
+	restoredReq.limitBytes = limitBytes;
+	restoredReq.version = version;
+	restoredReq.tags = TagSet();
+	data->actors.add(getKeyValuesQ(data, restoredReq));
+	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture = errorOr(restoredReq.reply.getFuture());
+
+	wait(success(sourceFuture) && success(restoredFuture));
+
+	// Check for errors
+	if (sourceFuture.get().isError()) {
+		throw sourceFuture.get().getError();
+	}
+	if (restoredFuture.get().isError()) {
+		throw restoredFuture.get().getError();
+	}
+	if (sourceFuture.get().get().error.present()) {
+		throw sourceFuture.get().get().error.get();
+	}
+	if (restoredFuture.get().get().error.present()) {
+		throw restoredFuture.get().get().error.get();
+	}
+
+	// If primary prefix has no data, try simulation prefix
+	if (restoredFuture.get().get().data.size() == 0 && sourceFuture.get().get().data.size() > 0) {
+		state GetKeyValuesRequest restoredReqSim;
+		restoredReqSim.begin = firstGreaterOrEqual(restoredRangeSimulation.begin);
+		restoredReqSim.end = firstGreaterOrEqual(restoredRangeSimulation.end);
+		restoredReqSim.limit = limit;
+		restoredReqSim.limitBytes = limitBytes;
+		restoredReqSim.version = version;
+		restoredReqSim.tags = TagSet();
+		data->actors.add(getKeyValuesQ(data, restoredReqSim));
+		state Future<ErrorOr<GetKeyValuesReply>> restoredFutureSim = errorOr(restoredReqSim.reply.getFuture());
+
+		wait(success(restoredFutureSim));
+
+		if (restoredFutureSim.get().isError()) {
+			throw restoredFutureSim.get().getError();
+		}
+		if (restoredFutureSim.get().get().error.present()) {
+			throw restoredFutureSim.get().get().error.get();
+		}
+
+		if (restoredFutureSim.get().get().data.size() > 0) {
+			useSimulationPrefix = true;
+			return std::make_pair(sourceFuture.get().get(), restoredFutureSim.get().get());
+		}
+	}
+
+	return std::make_pair(sourceFuture.get().get(), restoredFuture.get().get());
+}
+
+// Helper: Compare source and restored data, returning validation errors
+std::vector<std::string> compareSourceAndRestoredData(UID thisServerID,
+                                                      UID auditID,
+                                                      KeyRange auditRange,
+                                                      const GetKeyValuesReply& sourceReply,
+                                                      const GetKeyValuesReply& restoredReply,
+                                                      KeyRange rangeToRead,
+                                                      Version version,
+                                                      KeyRange claimRange,
+                                                      Key& lastKey,
+                                                      int64_t& numValidatedKeys) {
+	std::vector<std::string> errors;
+	int sourceIdx = 0;
+	int restoredIdx = 0;
+
+	while (sourceIdx < sourceReply.data.size() && restoredIdx < restoredReply.data.size()) {
+		KeyValueRef sourceKV = sourceReply.data[sourceIdx];
+		KeyValueRef restoredKV = restoredReply.data[restoredIdx];
+
+		// Remove the restoreLogKeys prefix from restored key to compare
+		Key restoredKeyWithoutPrefix = restoredKV.key.removePrefix(restoreLogKeys.begin);
+
+		if (sourceKV.key == restoredKeyWithoutPrefix) {
+			// Keys match, compare values
+			if (sourceKV.value != restoredKV.value) {
+				std::string error = format("Value Mismatch for Key %s: source value: %s, restored value: %s",
+				                           Traceable<StringRef>::toString(sourceKV.key).c_str(),
+				                           Traceable<StringRef>::toString(sourceKV.value).c_str(),
+				                           Traceable<StringRef>::toString(restoredKV.value).c_str());
+				TraceEvent(SevError, "SSAuditRestoreError", thisServerID)
+				    .setMaxFieldLength(-1)
+				    .setMaxEventLength(-1)
+				    .detail("AuditId", auditID)
+				    .detail("AuditRange", auditRange)
+				    .detail("ErrorMessage", error)
+				    .detail("Version", version)
+				    .detail("ClaimRange", claimRange);
+				errors.push_back(error);
+				break;
+			}
+			lastKey = sourceKV.key;
+			++numValidatedKeys;
+			++sourceIdx;
+			++restoredIdx;
+		} else if (sourceKV.key < restoredKeyWithoutPrefix) {
+			// Source key missing from restored data
+			std::string error =
+			    format("Missing key in restored data: %s", Traceable<StringRef>::toString(sourceKV.key).c_str());
+			TraceEvent(SevError, "SSAuditRestoreError", thisServerID)
+			    .setMaxFieldLength(-1)
+			    .setMaxEventLength(-1)
+			    .detail("AuditId", auditID)
+			    .detail("AuditRange", auditRange)
+			    .detail("ErrorMessage", error)
+			    .detail("Version", version)
+			    .detail("ClaimRange", claimRange);
+			errors.push_back(error);
+			break;
+		} else {
+			// Extra key in restored data (skip it, as per design doc: one-directional comparison)
+			++restoredIdx;
+		}
+	}
+
+	// Check for any remaining source keys that are missing from restored data
+	if (errors.empty() && sourceIdx < sourceReply.data.size() && !sourceReply.more) {
+		std::string error = format("Missing key(s) in restored data, next source key: %s",
+		                           Traceable<StringRef>::toString(sourceReply.data[sourceIdx].key).c_str());
+		TraceEvent(SevError, "SSAuditRestoreError", thisServerID)
+		    .setMaxFieldLength(-1)
+		    .setMaxEventLength(-1)
+		    .detail("AuditId", auditID)
+		    .detail("AuditRange", auditRange)
+		    .detail("ErrorMessage", error)
+		    .detail("Version", version)
+		    .detail("ClaimRange", claimRange);
+		errors.push_back(error);
+	}
+
+	return errors;
+}
+
+ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
+	ASSERT(req.getType() == AuditType::ValidateRestore);
+	wait(data->serveAuditStorageParallelismLock.take(TaskPriority::DefaultYield));
+	state FlowLock::Releaser holder(data->serveAuditStorageParallelismLock);
+
+	TraceEvent(SevInfo, "SSAuditRestoreBegin", data->thisServerID)
+	    .detail("AuditID", req.id)
+	    .detail("AuditRange", req.range)
+	    .detail("AuditType", req.type);
+
+	// Validate that req.range is within normalKeys (user keys only)
+	if (!normalKeys.contains(req.range)) {
+		TraceEvent(SevError, "SSAuditRestoreInvalidRange", data->thisServerID)
+		    .detail("AuditID", req.id)
+		    .detail("AuditRange", req.range)
+		    .detail("Error", "Range must be within normalKeys");
+		req.reply.sendError(audit_storage_failed());
+		return Void();
+	}
+
+	state AuditStorageState res(req.id, req.getType());
+	state std::vector<std::string> errors;
+	state Version version;
+	state KeyRange rangeToRead = req.range;
+	state Key rangeToReadBegin = req.range.begin;
+	state KeyRange claimRange;
+	state int limit = 1e4;
+	state int limitBytes = CLIENT_KNOBS->REPLY_BYTE_LIMIT;
+	state int64_t readBytes = 0;
+	state int64_t numValidatedKeys = 0;
+	state int64_t validatedBytes = 0;
+	state bool complete = false;
+	state double startTime = now();
+	state Reference<IRateControl> rateLimiter =
+	    Reference<IRateControl>(new SpeedLimit(SERVER_KNOBS->AUDIT_STORAGE_RATE_PER_SERVER_MAX, 1));
+
+	try {
+		loop {
+			try {
+				readBytes = 0;
+				rangeToRead = KeyRangeRef(rangeToReadBegin, req.range.end);
+				ASSERT(!rangeToRead.empty());
+
+				TraceEvent(SevDebug, "SSAuditRestoreNewRoundBegin", data->thisServerID)
+				    .suppressFor(10.0)
+				    .detail("AuditID", req.id)
+				    .detail("AuditRange", req.range)
+				    .detail("ReadRangeBegin", rangeToReadBegin)
+				    .detail("ReadRangeEnd", req.range.end);
+
+				errors.clear();
+
+				// Use current durable version for reading
+				version = data->version.get();
+
+				// Fetch both source and restored data
+				state std::pair<GetKeyValuesReply, GetKeyValuesReply> replyPair =
+				    wait(fetchSourceAndRestoredData(data, rangeToRead, version, limit, limitBytes));
+				state GetKeyValuesReply sourceReply = replyPair.first;
+				state GetKeyValuesReply restoredReply = replyPair.second;
+
+				readBytes = sourceReply.data.expectedSize() + restoredReply.data.expectedSize();
+				validatedBytes += readBytes;
+
+				// Check if we've completed reading
+				if (!sourceReply.more) {
+					complete = true;
+				}
+
+				// Compare source data with restored data
+				claimRange = rangeToRead;
+				state Key lastKey = rangeToRead.begin;
+				errors = compareSourceAndRestoredData(data->thisServerID,
+				                                      req.id,
+				                                      req.range,
+				                                      sourceReply,
+				                                      restoredReply,
+				                                      rangeToRead,
+				                                      version,
+				                                      claimRange,
+				                                      lastKey,
+				                                      numValidatedKeys);
+
+				// Update progress in the database
+				KeyRange completeRange = Standalone(KeyRangeRef(rangeToRead.begin, keyAfter(lastKey)));
+				if (!completeRange.empty() && claimRange.begin == completeRange.begin) {
+					claimRange = claimRange & completeRange;
+					AuditStorageState progressState(req.id, claimRange, req.getType());
+					progressState.setPhase(AuditPhase::Running);
+					progressState.ddId = req.ddId;
+					progressState.auditServerId = data->thisServerID;
+					wait(persistAuditStateByRange(data->cx, progressState));
+				}
+
+				// Apply rate limiting
+				wait(rateLimiter->getAllowance(readBytes));
+
+				// If errors found or complete, break
+				if (!errors.empty() || complete) {
+					break;
+				}
+
+				// Move to next range
+				rangeToReadBegin = keyAfter(lastKey);
+				if (rangeToReadBegin >= req.range.end) {
+					complete = true;
+					break;
+				}
+
+			} catch (Error& e) {
+				if (e.code() == error_code_actor_cancelled) {
+					throw e;
+				}
+				throw;
+			}
+		}
+
+		// Set final state
+		if (!errors.empty()) {
+			res.setPhase(AuditPhase::Error);
+			res.error = errors[0]; // Report first error
+			res.range = req.range;
+			TraceEvent(SevWarn, "SSAuditRestoreComplete", data->thisServerID)
+			    .detail("AuditID", req.id)
+			    .detail("AuditRange", req.range)
+			    .detail("Complete", complete)
+			    .detail("ValidationErrors", errors.size())
+			    .detail("NumValidatedKeys", numValidatedKeys)
+			    .detail("ValidatedBytes", validatedBytes)
+			    .detail("Duration", now() - startTime);
+		} else {
+			res.setPhase(AuditPhase::Complete);
+			res.range = req.range;
+			TraceEvent(SevInfo, "SSAuditRestoreComplete", data->thisServerID)
+			    .detail("AuditID", req.id)
+			    .detail("AuditRange", req.range)
+			    .detail("Complete", complete)
+			    .detail("NumValidatedKeys", numValidatedKeys)
+			    .detail("ValidatedBytes", validatedBytes)
+			    .detail("Duration", now() - startTime);
+		}
+
+		// Persist final audit state
+		res.ddId = req.ddId;
+		res.auditServerId = data->thisServerID;
+		wait(persistAuditStateByRange(data->cx, res));
+
+	} catch (Error& e) {
+		if (e.code() == error_code_actor_cancelled) {
+			throw e;
+		}
+		res.setPhase(AuditPhase::Error);
+		res.error = e.what();
+		res.range = req.range;
+		TraceEvent(SevWarn, "SSAuditRestoreError", data->thisServerID)
+		    .errorUnsuppressed(e)
+		    .detail("AuditID", req.id)
+		    .detail("AuditRange", req.range);
+		res.ddId = req.ddId;
+		res.auditServerId = data->thisServerID;
+		wait(persistAuditStateByRange(data->cx, res));
+	}
+
+	req.reply.send(res);
+	return Void();
+}
+
 ACTOR Future<Void> auditStorageShardReplicaQ(StorageServer* data, AuditStorageRequest req) {
 	ASSERT(req.getType() == AuditType::ValidateHA || req.getType() == AuditType::ValidateReplica);
 	wait(data->serveAuditStorageParallelismLock.take(TaskPriority::DefaultYield));
@@ -12484,6 +12863,8 @@ ACTOR Future<Void> storageServerCore(StorageServer* self, StorageServerInterface
 					self->actors.add(auditStorageShardReplicaQ(self, req));
 				} else if (req.getType() == AuditType::ValidateStorageServerShard) {
 					self->actors.add(auditStorageServerShardQ(self, req));
+				} else if (req.getType() == AuditType::ValidateRestore) {
+					self->actors.add(auditRestoreQ(self, req));
 				} else {
 					req.reply.sendError(not_implemented());
 				}
