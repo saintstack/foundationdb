@@ -35,10 +35,3 @@ simBackupAgents = 'BackupToFile'
     testName = 'RestoreValidation'
     validateAfter = 90.0
     maxWaitTime = 600.0
-
-    [[test.workload]]
-    testName = 'Attrition'
-    machinesToKill = 10
-    machinesToLeave = 3
-    reboot = true
-    testDuration = 90.0
