@@ -71,42 +71,9 @@ struct BackupAndRestoreValidationWorkload : TestWorkload {
 		// Only backup normal user keys (not system keys)
 		backupRanges.push_back_deep(backupRanges.arena(), normalKeys);
 		
-		// Force a read of all keys to ensure they're fully replicated and visible
-		// This prevents backup from missing keys that haven't been fully committed yet
-		state Transaction visibilityTr(cx);
-		state int64_t totalKeys = 0;
-		state KeySelector begin = firstGreaterOrEqual(normalKeys.begin);
-		state KeySelector end = firstGreaterOrEqual(normalKeys.end);
-		loop {
-			try {
-				RangeResult result = wait(visibilityTr.getRange(begin, end, GetRangeLimits(CLIENT_KNOBS->TOO_MANY)));
-				totalKeys += result.size();
-				TraceEvent("BARV_PreBackupScan")
-				    .detail("BatchKeys", result.size())
-				    .detail("TotalKeys", totalKeys)
-				    .detail("More", result.more);
-				if (result.more) {
-					begin = firstGreaterThan(result.back().key);
-				} else {
-					break;
-				}
-			} catch (Error& e) {
-				wait(visibilityTr.onError(e));
-			}
-		}
-		
-		TraceEvent("BARV_PreBackupKeyCount")
-		    .detail("TotalKeys", totalKeys)
-		    .detail("KeyRangeStart", normalKeys.begin)
-		    .detail("KeyRangeEnd", normalKeys.end);
-		
-		// Additional delay to ensure storage servers have durably committed all data
-		wait(delay(5.0));
-		
 		TraceEvent("BARV_SubmitBackup")
 		    .detail("Tag", printable(self->backupTag))
-		    .detail("Container", backupContainer)
-		    .detail("KeysToBackup", totalKeys);
+		    .detail("Container", backupContainer);
 		
 		try {
 			wait(backupAgent->submitBackup(cx,
@@ -175,37 +142,6 @@ struct BackupAndRestoreValidationWorkload : TestWorkload {
 		TraceEvent("BARV_RestoreComplete")
 		    .detail("Tag", printable(restoreTag))
 		    .detail("AddPrefix", printable(self->addPrefix));
-		
-		// DEBUG: Count restored keys
-		state Transaction restoreCountTr(cx);
-		state int64_t restoredKeys = 0;
-		state KeyRange restoredRange = prefixRange(self->addPrefix);
-		state KeySelector restoreBegin = firstGreaterOrEqual(restoredRange.begin);
-		state KeySelector restoreEnd = firstGreaterOrEqual(restoredRange.end);
-		loop {
-			try {
-				restoreCountTr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
-				restoreCountTr.setOption(FDBTransactionOptions::LOCK_AWARE);
-				RangeResult restoredResult = wait(restoreCountTr.getRange(restoreBegin, restoreEnd, GetRangeLimits(CLIENT_KNOBS->TOO_MANY)));
-				restoredKeys += restoredResult.size();
-				TraceEvent("BARV_PostRestoreScan")
-				    .detail("BatchKeys", restoredResult.size())
-				    .detail("TotalKeys", restoredKeys)
-				    .detail("More", restoredResult.more);
-				if (restoredResult.more) {
-					restoreBegin = firstGreaterThan(restoredResult.back().key);
-				} else {
-					break;
-				}
-			} catch (Error& e) {
-				wait(restoreCountTr.onError(e));
-			}
-		}
-		
-		TraceEvent("BARV_PostRestoreKeyCount")
-		    .detail("RestoredKeys", restoredKeys)
-		    .detail("RestoredRangeStart", restoredRange.begin)
-		    .detail("RestoredRangeEnd", restoredRange.end);
 		
 		// Write a completion marker so RestoreValidation knows restore is fully done
 		state Key completionMarker = restoreValidationCompletionKey;
