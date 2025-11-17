@@ -17,7 +17,6 @@ restore_validation_enabled = 1
 testTitle = 'RestoreValidationSimple'
 clearAfterTest = false
 simBackupAgents = 'BackupToFile'
-timeout = 1200
 
     [[test.workload]]
     testName = 'Cycle'
@@ -35,11 +34,11 @@ timeout = 1200
     [[test.workload]]
     testName = 'RestoreValidation'
     validateAfter = 90.0
-    maxWaitTime = 1200.0
+    maxWaitTime = 600.0
 
     [[test.workload]]
     testName = 'Attrition'
     machinesToKill = 10
     machinesToLeave = 3
     reboot = true
-    testDuration = 1200.0
+    testDuration = 90.0
