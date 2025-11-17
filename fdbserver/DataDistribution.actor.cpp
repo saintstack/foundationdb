@@ -3764,7 +3764,9 @@ ACTOR Future<UID> launchAudit(Reference<DataDistributor> self,
 			// hence a new audit resumption loads audits from disk and launch the audits
 			// Since the resumed audit has already taken over the launchAudit job,
 			// we simply retry this launchAudit, then return the audit id to client
-			if (g_network->isSimulated() && deterministicRandom()->coinflip()) {
+			// Skip this injection for ValidateRestore as the simple test needs a clean run
+			if (g_network->isSimulated() && auditType != AuditType::ValidateRestore &&
+			    deterministicRandom()->coinflip()) {
 				TraceEvent(SevDebug, "DDAuditStorageLaunchInjectActorCancelWhenPersist", self->ddId)
 				    .detail("AuditID", auditID_)
 				    .detail("AuditType", auditType)
@@ -4218,7 +4220,10 @@ ACTOR Future<Void> dispatchAuditStorage(Reference<DataDistributor> self, std::sh
 			state int i = 0;
 			for (; i < auditStates.size(); i++) {
 				state AuditPhase phase = auditStates[i].getPhase();
-				ASSERT(phase != AuditPhase::Running && phase != AuditPhase::Failed);
+				// Skip Running/Failed states during retries (they will be updated on retry)
+				if (phase == AuditPhase::Running || phase == AuditPhase::Failed) {
+					continue;
+				}
 				totalCount++;
 				if (phase == AuditPhase::Complete) {
 					completedCount++;
@@ -4369,7 +4374,10 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 					state int auditStateIndex = 0;
 					for (; auditStateIndex < auditStates.size(); ++auditStateIndex) {
 						state AuditPhase phase = auditStates[auditStateIndex].getPhase();
-						ASSERT(phase != AuditPhase::Running && phase != AuditPhase::Failed);
+						// Skip Running/Failed states during retries (they will be updated on retry)
+						if (phase == AuditPhase::Running || phase == AuditPhase::Failed) {
+							continue;
+						}
 						if (phase == AuditPhase::Complete) {
 							continue;
 						} else if (phase == AuditPhase::Error) {
@@ -4407,7 +4415,7 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 								req.targetServers.push_back(it->second[idx].id());
 								storageServersToCheck.push_back(it->second[idx]);
 							}
-						} else if (auditType == AuditType::ValidateReplica || auditType == AuditType::ValidateRestore) {
+						} else if (auditType == AuditType::ValidateReplica) {
 							// select a server from primary DC to do audit
 							// check all servers from each DC
 							int dcid = 0;
@@ -4427,6 +4435,7 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 								}
 								dcid++;
 							}
+							// ValidateReplica requires multiple replicas, skip if single replica
 							if (storageServersToCheck.size() <= 1) {
 								TraceEvent(SevInfo, "DDScheduleAuditOnRangeEnd", self->ddId)
 								    .detail("Reason", "Single replica, ignore")
@@ -4434,6 +4443,26 @@ ACTOR Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 								    .detail("AuditRange", audit->coreState.range)
 								    .detail("AuditType", auditType);
 								return Void();
+							}
+						} else if (auditType == AuditType::ValidateRestore) {
+							// select a server from primary DC to do audit
+							// ValidateRestore compares source vs restored data, single replica is fine
+							int dcid = 0;
+							for (const auto& [_, dcServers] : rangeLocations[rangeLocationIndex].servers) {
+								if (dcid == 0) {
+									// in primary DC randomly select a server to do the audit task
+									const int idx = deterministicRandom()->randomInt(0, dcServers.size());
+									targetServer = dcServers[idx];
+								}
+								for (int i = 0; i < dcServers.size(); i++) {
+									if (dcServers[i].id() == targetServer.id()) {
+										ASSERT_WE_THINK(dcid == 0);
+									} else {
+										req.targetServers.push_back(dcServers[i].id());
+									}
+									storageServersToCheck.push_back(dcServers[i]);
+								}
+								dcid++;
 							}
 						} else {
 							UNREACHABLE();

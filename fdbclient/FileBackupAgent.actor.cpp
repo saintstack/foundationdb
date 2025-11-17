@@ -4523,7 +4523,9 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 
 					for (; i < iend; ++i) {
 						tr->setOption(FDBTransactionOptions::NEXT_WRITE_NO_WRITE_CONFLICT_RANGE);
-						if (tenantCache.present()) {
+						// Skip tenant validation when restoring with a prefix
+						// Prefixed keys (e.g., 'restored/' or '\xff\x02/rlog/') are not tenant keys
+						if (tenantCache.present() && addPrefix.get() == StringRef()) {
 							validTenantCheckFutures.push_back(_validTenantAccess(
 							    StringRef(arena,
 							              data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())),

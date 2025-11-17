@@ -4522,52 +4522,56 @@ ACTOR Future<Void> auditStorageServerShardQ(StorageServer* data, AuditStorageReq
  *   --knob-RESTORE_VALIDATION_ENABLED=1  # Prevents auto-unlock after restore
  *   --knob-RESTORE_VALIDATION=1          # Bypasses empty cluster check
  *
- * === DUAL PREFIX SUPPORT ===
- * This implementation supports TWO restore prefixes:
- *   1. restoreLogKeys (\xff\x02/rlog/) - for production/CLI usage
- *   2. restoreLogKeysSimulation (restored/) - for simulation tests
- * The audit code automatically detects which prefix has data and uses it.
  */
+
+// Helper: Issue a GetKeyValues request for a given range and return the future
+static Future<ErrorOr<GetKeyValuesReply>> issueGetKeyValuesRequest(StorageServer* data,
+                                                                   KeyRange range,
+                                                                   Version version,
+                                                                   int limit,
+                                                                   int limitBytes) {
+	GetKeyValuesRequest req;
+	req.begin = firstGreaterOrEqual(range.begin);
+	req.end = firstGreaterOrEqual(range.end);
+	req.limit = limit;
+	req.limitBytes = limitBytes;
+	req.version = version;
+	req.tags = TagSet();
+	data->actors.add(getKeyValuesQ(data, req));
+	return errorOr(req.reply.getFuture());
+}
 
 // Helper: Read both source and restored data for a given range
 //
-// IMPORTANT: This function looks for restored data at EITHER:
-//   1. restoreLogKeys (\xff\x02/rlog/) - for production/CLI usage
-//   2. restoreLogKeysSimulation (restored/) - for simulation tests
-// The function tries the primary prefix first, then falls back to simulation prefix if empty.
+// Restored data is stored at restoreLogKeys (\xff\x02/rlog/) in system key space.
+// NOTE: We read the ENTIRE restored keyspace (not just rangeToRead with prefix),
+// because restored keys are stored with their original names under the prefix.
+// E.g., source key "mykey" is restored as "\xff\x02/rlog/mykey"
 ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSourceAndRestoredData(StorageServer* data,
                                                                                                 KeyRange rangeToRead,
                                                                                                 Version version,
                                                                                                 int limit,
                                                                                                 int limitBytes) {
-	// Try primary prefix first (production system key space), then fall back to simulation prefix
-	state KeyRange restoredRange = KeyRangeRef(rangeToRead.begin.withPrefix(restoreLogKeys.begin),
-	                                           rangeToRead.end.withPrefix(restoreLogKeys.begin));
-	state KeyRange restoredRangeSimulation = KeyRangeRef(rangeToRead.begin.withPrefix(restoreLogKeysSimulation.begin),
-	                                                     rangeToRead.end.withPrefix(restoreLogKeysSimulation.begin));
-	state bool useSimulationPrefix = false;
+	// Construct the restored range by adding the restore prefix to the source range
+	// E.g., if source range is "key1 - key2", restored range is "\xff\x02/rlog/key1 - \xff\x02/rlog/key2"
+	state Key restoredBegin = rangeToRead.begin.withPrefix(restoreLogKeys.begin);
+	state Key restoredEnd = rangeToRead.end.withPrefix(restoreLogKeys.begin);
+	state KeyRange restoredRange = KeyRangeRef(restoredBegin, restoredEnd);
+
+	TraceEvent("SSAuditRestoreFetch", data->thisServerID)
+	    .detail("RangeToRead", rangeToRead)
+	    .detail("RestoredRange", restoredRange)
+	    .detail("Version", version)
+	    .detail("Limit", limit)
+	    .detail("LimitBytes", limitBytes);
 
 	// Read source data from user key range
-	GetKeyValuesRequest sourceReq;
-	sourceReq.begin = firstGreaterOrEqual(rangeToRead.begin);
-	sourceReq.end = firstGreaterOrEqual(rangeToRead.end);
-	sourceReq.limit = limit;
-	sourceReq.limitBytes = limitBytes;
-	sourceReq.version = version;
-	sourceReq.tags = TagSet();
-	data->actors.add(getKeyValuesQ(data, sourceReq));
-	state Future<ErrorOr<GetKeyValuesReply>> sourceFuture = errorOr(sourceReq.reply.getFuture());
+	state Future<ErrorOr<GetKeyValuesReply>> sourceFuture =
+	    issueGetKeyValuesRequest(data, rangeToRead, version, limit, limitBytes);
 
-	// Try primary prefix first
-	GetKeyValuesRequest restoredReq;
-	restoredReq.begin = firstGreaterOrEqual(restoredRange.begin);
-	restoredReq.end = firstGreaterOrEqual(restoredRange.end);
-	restoredReq.limit = limit;
-	restoredReq.limitBytes = limitBytes;
-	restoredReq.version = version;
-	restoredReq.tags = TagSet();
-	data->actors.add(getKeyValuesQ(data, restoredReq));
-	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture = errorOr(restoredReq.reply.getFuture());
+	// Read restored data from system key space
+	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture =
+	    issueGetKeyValuesRequest(data, restoredRange, version, limit, limitBytes);
 
 	wait(success(sourceFuture) && success(restoredFuture));
 
@@ -4585,32 +4589,14 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 		throw restoredFuture.get().get().error.get();
 	}
 
-	// If primary prefix has no data, try simulation prefix
-	if (restoredFuture.get().get().data.size() == 0 && sourceFuture.get().get().data.size() > 0) {
-		state GetKeyValuesRequest restoredReqSim;
-		restoredReqSim.begin = firstGreaterOrEqual(restoredRangeSimulation.begin);
-		restoredReqSim.end = firstGreaterOrEqual(restoredRangeSimulation.end);
-		restoredReqSim.limit = limit;
-		restoredReqSim.limitBytes = limitBytes;
-		restoredReqSim.version = version;
-		restoredReqSim.tags = TagSet();
-		data->actors.add(getKeyValuesQ(data, restoredReqSim));
-		state Future<ErrorOr<GetKeyValuesReply>> restoredFutureSim = errorOr(restoredReqSim.reply.getFuture());
-
-		wait(success(restoredFutureSim));
-
-		if (restoredFutureSim.get().isError()) {
-			throw restoredFutureSim.get().getError();
-		}
-		if (restoredFutureSim.get().get().error.present()) {
-			throw restoredFutureSim.get().get().error.get();
-		}
-
-		if (restoredFutureSim.get().get().data.size() > 0) {
-			useSimulationPrefix = true;
-			return std::make_pair(sourceFuture.get().get(), restoredFutureSim.get().get());
-		}
-	}
+	// Log what we fetched
+	TraceEvent("SSAuditRestoreFetchResult", data->thisServerID)
+	    .detail("SourceKeys", sourceFuture.get().get().data.size())
+	    .detail("RestoredKeys", restoredFuture.get().get().data.size())
+	    .detail("SourceBytes", sourceFuture.get().get().data.expectedSize())
+	    .detail("RestoredBytes", restoredFuture.get().get().data.expectedSize())
+	    .detail("SourceMore", sourceFuture.get().get().more)
+	    .detail("RestoredMore", restoredFuture.get().get().more);
 
 	return std::make_pair(sourceFuture.get().get(), restoredFuture.get().get());
 }
@@ -4630,11 +4616,30 @@ std::vector<std::string> compareSourceAndRestoredData(UID thisServerID,
 	int sourceIdx = 0;
 	int restoredIdx = 0;
 
+	TraceEvent("SSAuditRestoreCompare", thisServerID)
+	    .detail("AuditID", auditID)
+	    .detail("SourceKeys", sourceReply.data.size())
+	    .detail("RestoredKeys", restoredReply.data.size())
+	    .detail("RangeToRead", rangeToRead)
+	    .detail("Version", version);
+
+	// Log first few keys from both sets for debugging
+	if (sourceReply.data.size() > 0) {
+		TraceEvent("SSAuditRestoreCompareSourceKeys", thisServerID)
+		    .detail("FirstSourceKey", sourceReply.data[0].key)
+		    .detail("LastSourceKey", sourceReply.data[sourceReply.data.size() - 1].key);
+	}
+	if (restoredReply.data.size() > 0) {
+		TraceEvent("SSAuditRestoreCompareRestoredKeys", thisServerID)
+		    .detail("FirstRestoredKey", restoredReply.data[0].key)
+		    .detail("LastRestoredKey", restoredReply.data[restoredReply.data.size() - 1].key);
+	}
+
 	while (sourceIdx < sourceReply.data.size() && restoredIdx < restoredReply.data.size()) {
 		KeyValueRef sourceKV = sourceReply.data[sourceIdx];
 		KeyValueRef restoredKV = restoredReply.data[restoredIdx];
 
-		// Remove the restoreLogKeys prefix from restored key to compare
+		// Remove the restore prefix from restored key to compare
 		Key restoredKeyWithoutPrefix = restoredKV.key.removePrefix(restoreLogKeys.begin);
 
 		if (sourceKV.key == restoredKeyWithoutPrefix) {

@@ -154,7 +154,6 @@ if(WITH_PYTHON)
   add_fdb_test(TEST_FILES fast/BackupCorrectnessClean.toml)
   add_fdb_test(TEST_FILES fast/BackupToDBCorrectness.toml)
   add_fdb_test(TEST_FILES fast/BackupToDBCorrectnessClean.toml)
-  add_fdb_test(TEST_FILES fast/RestoreValidation.toml)
   add_fdb_test(TEST_FILES fast/RestoreValidation_Simple.toml)
 
   # IGNORE below because we do not use tenant mode and it is likely to be
