@@ -4538,12 +4538,17 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 				TraceEvent("FileRestoreRangeWrite")
 				    .detail("RestoreUID", restore.getUid())
 				    .detail("KeysWritten", iend - start)
-				    .detail("FirstKey", printable(data[start].key))
-				    .detail("LastKey", printable(data[iend - 1].key))
+				    .detail("FirstDataKey", printable(data[start].key))
+				    .detail("LastDataKey", printable(data[iend - 1].key))
 				    .detail("FirstRestoredKey", printable(data[start].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
 				    .detail("LastRestoredKey", printable(data[iend - 1].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+				    .detail("FileRangeBegin", printable(fileRange.begin))
+				    .detail("FileRangeEnd", printable(fileRange.end))
 				    .detail("AddPrefix", printable(addPrefix.get()))
-				    .detail("RemovePrefix", printable(removePrefix.get()));
+				    .detail("RemovePrefix", printable(removePrefix.get()))
+				    .detail("DataStart", start)
+				    .detail("DataEnd", iend)
+				    .detail("TotalDataSize", end);
 
 					// Add to bytes written count
 					restore.bytesWritten().atomicOp(tr, txBytes, MutationRef::Type::AddValue);
