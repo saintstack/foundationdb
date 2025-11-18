@@ -32,11 +32,11 @@ waitForQuiescenceBegin = false
 
     [[test.workload]]
     testName = 'BackupAndRestoreValidation'
-    backupAfter = 20.0
-    restoreAfter = 70.0
+    backupAfter = 40.0
+    restoreAfter = 90.0
     addPrefix = '\xff\x02/rlog/'
 
     [[test.workload]]
     testName = 'RestoreValidation'
-    validateAfter = 90.0
+    validateAfter = 110.0
     maxWaitTime = 600.0
