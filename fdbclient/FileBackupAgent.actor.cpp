@@ -2566,6 +2566,13 @@ struct BackupRangeTaskFunc : BackupTaskFuncBase {
 				if (outFile) {
 					CODE_PROBE(outVersion != invalidVersion, "Backup range task wrote multiple versions");
 					state Key nextKey = done ? endKey : keyAfter(lastKey);
+					TraceEvent("BackupRangeFileClosing")
+					    .detail("Done", done)
+					    .detail("LastKey", printable(lastKey))
+					    .detail("NextKey", printable(nextKey))
+					    .detail("EndKey", printable(endKey))
+					    .detail("OutVersion", outVersion)
+					    .detail("NewVersion", values.second);
 					wait(rangeFile->writeKey(nextKey));
 
 					if (BUGGIFY) {

@@ -4227,9 +4227,13 @@ ACTOR Future<Void> dispatchAuditStorage(Reference<DataDistributor> self, std::sh
 				totalCount++;
 				if (phase == AuditPhase::Complete) {
 					completedCount++;
-				} else if (phase == AuditPhase::Error) {
-					completedCount++;
-					audit->foundError = true;
+			} else if (phase == AuditPhase::Error) {
+				completedCount++;
+				audit->foundError = true;
+				// Capture first error message from range states
+				if (audit->coreState.error.empty() && !auditStates[i].error.empty()) {
+					audit->coreState.error = auditStates[i].error;
+				}
 				} else {
 					ASSERT(phase == AuditPhase::Invalid);
 					ASSERT(audit->remainingBudgetForAuditTasks.get() >= 0);

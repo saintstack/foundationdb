@@ -4635,6 +4635,12 @@ std::vector<std::string> compareSourceAndRestoredData(UID thisServerID,
 		    .detail("LastRestoredKey", restoredReply.data[restoredReply.data.size() - 1].key);
 	}
 
+	TraceEvent("SSAuditRestoreCompareStart", thisServerID)
+	    .detail("SourceSize", sourceReply.data.size())
+	    .detail("RestoredSize", restoredReply.data.size())
+	    .detail("SourceMore", sourceReply.more)
+	    .detail("RestoredMore", restoredReply.more);
+
 	while (sourceIdx < sourceReply.data.size() && restoredIdx < restoredReply.data.size()) {
 		KeyValueRef sourceKV = sourceReply.data[sourceIdx];
 		KeyValueRef restoredKV = restoredReply.data[restoredIdx];
@@ -4698,6 +4704,14 @@ std::vector<std::string> compareSourceAndRestoredData(UID thisServerID,
 		    .detail("ClaimRange", claimRange);
 		errors.push_back(error);
 	}
+
+	TraceEvent("SSAuditRestoreCompareEnd", thisServerID)
+	    .detail("SourceIdx", sourceIdx)
+	    .detail("RestoredIdx", restoredIdx)
+	    .detail("SourceSize", sourceReply.data.size())
+	    .detail("RestoredSize", restoredReply.data.size())
+	    .detail("LastKey", printable(lastKey))
+	    .detail("ErrorCount", errors.size());
 
 	return errors;
 }
