@@ -3800,11 +3800,6 @@ ACTOR Future<UID> launchAudit(Reference<DataDistributor> self,
 			// Skip this injection for ValidateRestore as the simple test needs a clean run
 			if (g_network->isSimulated() && auditType != AuditType::ValidateRestore &&
 			    deterministicRandom()->coinflip()) {
-				TraceEvent(SevDebug, "DDAuditStorageLaunchInjectActorCancelWhenPersist", self->ddId)
-				    .detail("AuditID", auditID_)
-				    .detail("AuditType", auditType)
-				    .detail("KeyValueStoreType", auditStorageEngineType)
-				    .detail("Range", auditRange);
 				throw operation_failed(); // Trigger DD restart and check if resume audit is correct
 			}
 			TraceEvent(SevInfo, "DDAuditStorageLaunchPersistNewAuditID", self->ddId)
@@ -4260,13 +4255,13 @@ ACTOR Future<Void> dispatchAuditStorage(Reference<DataDistributor> self, std::sh
 				totalCount++;
 				if (phase == AuditPhase::Complete) {
 					completedCount++;
-			} else if (phase == AuditPhase::Error) {
-				completedCount++;
-				audit->foundError = true;
-				// Capture first error message from range states
-				if (audit->coreState.error.empty() && !auditStates[i].error.empty()) {
-					audit->coreState.error = auditStates[i].error;
-				}
+				} else if (phase == AuditPhase::Error) {
+					completedCount++;
+					audit->foundError = true;
+					// Capture first error message from range states
+					if (audit->coreState.error.empty() && !auditStates[i].error.empty()) {
+						audit->coreState.error = auditStates[i].error;
+					}
 				} else {
 					ASSERT(phase == AuditPhase::Invalid);
 					ASSERT(audit->remainingBudgetForAuditTasks.get() >= 0);
