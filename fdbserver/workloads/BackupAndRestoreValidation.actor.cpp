@@ -174,8 +174,11 @@ struct BackupAndRestoreValidationWorkload : TestWorkload {
 	}
 
 	ACTOR static Future<Void> _start(Database cx, BackupAndRestoreValidationWorkload* self) {
-		// Only run on client 0 to avoid conflicts
+		// Only run on client 0 to avoid conflicts, but other clients wait to keep test alive
 		if (self->clientId != 0) {
+			// Wait for the expected duration to prevent test from completing early
+			// This allows multiple test iterations
+			wait(delay(self->restoreAfter + 60.0)); // Wait for restore + buffer
 			return Void();
 		}
 		
