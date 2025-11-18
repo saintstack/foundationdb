@@ -297,11 +297,11 @@ What the Audit Validates
 
 The audit ensures:
 
-✅ The restore process correctly copied data from backup to the restored location
+✅ The restore process worked without corruption during the restore operation
 
-✅ No data corruption occurred during the restore operation
+✅ Current source data matches the restored data at the time of audit
 
-✅ All keys in the specified range were restored correctly
+✅ No data corruption occurred between source and restored locations
 
 What the Audit Does NOT Validate
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
