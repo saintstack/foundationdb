@@ -28,8 +28,8 @@ waitForQuiescenceBegin = false
 
     [[test.workload]]
     testName = 'BackupAndRestoreValidation'
-    backupAfter = 10.0
-    restoreAfter = 60.0
+    backupAfter = 40.0
+    restoreAfter = 80.0
     addPrefix = '\xff\x02/rlog/'
 
     [[test.workload]]
