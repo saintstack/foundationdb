@@ -83,10 +83,8 @@ struct RestoreValidationWorkload : TestWorkload {
 	void getMetrics(std::vector<PerfMetric>& m) override {}
 
 	ACTOR static Future<Void> _start(RestoreValidationWorkload* self, Database cx) {
-		// Only run on client 0 to avoid conflicts, but other clients wait to keep test alive
+		// Only run on client 0 to avoid conflicts (backup/restore runs on client 0)
 		if (self->clientId != 0) {
-			// Wait for the expected duration to prevent test from completing early
-			wait(delay(self->validateAfter + self->maxWaitTime));
 			return Void();
 		}
 
