@@ -2565,9 +2565,7 @@ struct BackupRangeTaskFunc : BackupTaskFuncBase {
 			if (values.second != outVersion || done) {
 				if (outFile) {
 					CODE_PROBE(outVersion != invalidVersion, "Backup range task wrote multiple versions");
-					// Use endKey as the end marker to ensure no gaps with the next backup task
-					// The next task will start at endKey, so this file's range should be [beginKey, endKey)
-					state Key nextKey = endKey;
+					state Key nextKey = done ? endKey : keyAfter(lastKey);
 					wait(rangeFile->writeKey(nextKey));
 
 					if (BUGGIFY) {
