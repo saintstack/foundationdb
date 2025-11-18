@@ -10,6 +10,10 @@
 
 testClass = "Backup"
 
+[configuration]
+buggify = false
+faultInjection = false
+
 [[knobs]]
 restore_validation_enabled = 1
 
