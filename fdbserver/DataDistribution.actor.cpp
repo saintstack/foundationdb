@@ -3562,7 +3562,9 @@ ACTOR Future<Void> auditStorageCore(Reference<DataDistributor> self,
 					throw retry();
 				}
 			}
-			audit->coreState.setPhase(AuditPhase::Complete);
+			if (!audit->foundError) {
+				audit->coreState.setPhase(AuditPhase::Complete);
+			}
 		}
 		TraceEvent(SevVerbose, "DDAuditStorageCoreCompleteAudit", self->ddId)
 		    .detail("Context", audit->getDDAuditContext())

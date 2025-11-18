@@ -69,7 +69,7 @@ struct AuditStorageState {
 		                  ", [Range]: " + Traceable<KeyRangeRef>::toString(range) +
 		                  ", [Type]: " + std::to_string(type) + ", [Phase]: " + std::to_string(phase);
 		if (!error.empty()) {
-			res += "[Error]: " + error;
+			res += ", [Error]: " + error;
 		}
 
 		return res;
