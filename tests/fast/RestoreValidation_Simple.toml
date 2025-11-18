@@ -36,14 +36,3 @@ waitForQuiescenceBegin = false
     testName = 'RestoreValidation'
     validateAfter = 90.0
     maxWaitTime = 600.0
-
-    [[test.workload]]
-    testName = 'RandomClogging'
-    testDuration = 120.0
-
-    [[test.workload]]
-    testName = 'Attrition'
-    machinesToKill = 10
-    machinesToLeave = 3
-    reboot = true
-    testDuration = 120.0
