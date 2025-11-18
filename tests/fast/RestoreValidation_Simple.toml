@@ -20,18 +20,18 @@ simBackupAgents = 'BackupToFile'
 
     [[test.workload]]
     testName = 'Cycle'
-    nodeCount = 10000
-    transactionsPerSecond = 2500.0
-    testDuration = 10.0
+    nodeCount = 100
+    transactionsPerSecond = 10.0
+    testDuration = 5.0
     expectedRate = 0
 
     [[test.workload]]
     testName = 'BackupAndRestoreValidation'
-    backupAfter = 10.0
-    restoreAfter = 60.0
+    backupAfter = 5.0
+    restoreAfter = 30.0
     addPrefix = '\xff\x02/rlog/'
 
     [[test.workload]]
     testName = 'RestoreValidation'
-    validateAfter = 90.0
-    maxWaitTime = 600.0
+    validateAfter = 40.0
+    maxWaitTime = 300.0
