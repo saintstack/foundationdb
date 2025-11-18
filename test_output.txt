@@ -1,0 +1,441 @@
+Random seed is 982898609...
+DeterministicRandom successfully bound to OpenSSL RNG
+sim http machines = 3
+Datacenter 0: 4/7 machines, 1/1 coordinators, 3 other machines
+sim http machines = 3
+Datacenter 1: 3/7 machines, 0/1 coordinators, 3 other machines
+Process 2.0.1.5 run http server
+SimHTTPServer protecting 2.0.1.5:1
+HTTP: adding address 2.0.1.5:5000 for alwaysfail_donotuse:80
+Process 2.1.1.4 run http server
+HTTP: adding address 2.1.1.4:5000 for alwaysfail_donotuse:80
+Process 2.0.1.4 run http server
+HTTP: adding address 2.0.1.4:5000 for alwaysfail_donotuse:80
+Process 2.1.1.3 run http server
+HTTP: adding address 2.1.1.3:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+Process 2.1.1.5 run http server
+HTTP: adding address 2.1.1.5:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+FDBD joined cluster.
+Process 2.0.1.6 run http server
+HTTP: adding address 2.0.1.6:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+startingConfiguration:new backup_worker_enabled:=1 encryption_at_rest_mode=disabled grv_proxies:=2 log_engine=ssd-2 log_spill:=2 perpetual_storage_wiggle:=1 perpetual_storage_wiggle_engine=none proxies:=2 triple storage_engine=ssd-rocksdb-v1 storage_migration_type=disabled tenant_mode=required_experimental usable_regions:=1 start
+useDB: true
+Simulated Cluster Topology:
+===========================
+    zoneId: 328d40e14d22e66b1dac02516351b8f9
+      machineId: 328d40e14d22e66b1dac02516351b8f9
+        Address: 3.4.3.2:1
+          Class: test
+          Name: Server
+    zoneId: 4043ea6d187ef814b0b0a217b18bd352
+      machineId: f578ccee78b8fcf51e7c5a1e42f4ac23
+        Address: 1.1.1.1:1
+          Class: test
+          Name: TestSystem
+    zoneId: 6f0b9e6e962e0f88a564346f51cb6275
+      machineId: 6f0b9e6e962e0f88a564346f51cb6275
+        Address: 3.4.3.1:1
+          Class: test
+          Name: Server
+    zoneId: d3a5667e8640cb8cd62cbd3e03e48c35
+      machineId: d3a5667e8640cb8cd62cbd3e03e48c35
+        Address: 3.4.3.4:1
+          Class: test
+          Name: Server
+    zoneId: d8290ebdfd615de2a388b8726f0ff948
+      machineId: d8290ebdfd615de2a388b8726f0ff948
+        Address: 3.4.3.6:1
+          Class: test
+          Name: Server
+    zoneId: e0d3104060bfc7fae35fcb74f3268a82
+      machineId: e0d3104060bfc7fae35fcb74f3268a82
+        Address: 3.4.3.5:1
+          Class: test
+          Name: Server
+    zoneId: e5f60757eee8d59a06f284cb2bdb71c1
+      machineId: e5f60757eee8d59a06f284cb2bdb71c1
+        Address: 3.4.3.3:1
+          Class: test
+          Name: Server
+dcId: 0
+  dataHallId: 0
+    zoneId: 19a703616af9fa3e0be9f0d931602ed2
+      machineId: 2f1ddef4bcfc7853b161ce4fba656cff
+        Address: 2.0.1.6:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 22c5a86843122a7e60356fc2a2655f19
+      machineId: 6ada2d1f8a891aa55c1d85670b40ebd7
+        Address: 2.0.3.1:3
+          Class: unset
+          Name: Server
+        Address: 2.0.3.1:4
+          Class: unset
+          Name: Server
+        Address: 2.0.1.1:1
+          Class: unset
+          Name: Server
+        Address: 2.0.2.1:2
+          Class: unset
+          Name: Server
+    zoneId: 26b4aa19ec1dcf3adc077461332993d1
+      machineId: 46ecd3d012dccc3da5086878e56fefec
+        Address: 2.0.1.2:1
+          Class: unset
+          Name: Server
+        Address: 2.0.4.2:4
+          Class: unset
+          Name: Server
+        Address: 2.0.2.2:2
+          Class: unset
+          Name: Server
+        Address: 2.0.3.2:3
+          Class: unset
+          Name: Server
+    zoneId: 3c0c72eee7e6d62ba2b670881a6cad39
+      machineId: f4622d681d39221006b0ea49bced00ee
+        Address: 2.0.1.5:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 87507d45744cf3ed096ff80e4e0a0b0e
+      machineId: c61a62452811a34ad2e37163208d19cf
+        Address: 2.0.1.4:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: a6e33b4f6df414f90d5246a462e121a7
+      machineId: 5b38641b13b26ddba6019afcfd47f2ba
+        Address: 2.0.1.0:4
+          Class: unset
+          Name: Server
+        Address: 2.0.2.0:2
+          Class: unset
+          Name: Server
+        Address: 2.0.1.0:1
+          Class: unset
+          Name: Server
+        Address: 2.0.3.0:3
+          Class: unset
+          Name: Server
+    zoneId: cad2a5cffcedb7a1603f265de34ef29e
+      machineId: d5564e32283a748edb5aeaa6653d340e
+        Address: 2.0.1.3:1
+          Class: unset
+          Name: Server
+        Address: 2.0.2.3:3
+          Class: unset
+          Name: Server
+        Address: 2.0.2.3:4
+          Class: unset
+          Name: Server
+        Address: 2.0.1.3:2
+          Class: unset
+          Name: Server
+dcId: 1
+  dataHallId: 1
+    zoneId: 04335ece47f9a3a90ba7e9227cdb5221
+      machineId: d70a746390792fbbc3bd3227d1a8b3cb
+        Address: 2.1.1.5:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 254bd3d888e8f03be36c7a517f6830cb
+      machineId: 6f02acb4549bde8a38e26acc85e8d938
+        Address: 2.1.1.2:4
+          Class: storage
+          Name: Server
+        Address: 2.1.3.2:3
+          Class: storage
+          Name: Server
+        Address: 2.1.1.2:1
+          Class: storage
+          Name: Server
+        Address: 2.1.2.2:2
+          Class: storage
+          Name: Server
+    zoneId: 7a890593b8d20c191d9084d91f8c9164
+      machineId: 34d2e0032d221c9e0bb89976ce5970a8
+        Address: 2.1.1.0:1
+          Class: transaction
+          Name: Server
+        Address: 2.1.1.0:2
+          Class: transaction
+          Name: Server
+        Address: 2.1.2.0:4
+          Class: transaction
+          Name: Server
+        Address: 2.1.2.0:3
+          Class: transaction
+          Name: Server
+    zoneId: acd74361a3ce299364b97f9aa21ca199
+      machineId: 5d35c0bcddd22b72fdb3ea15f55fd451
+        Address: 2.1.1.4:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: c9a0307f7a31286eaff0397d4da89ecb
+      machineId: 3aafcf960e1e8481592d56be0ded6128
+        Address: 2.1.2.1:2
+          Class: transaction
+          Name: Server
+        Address: 2.1.3.1:3
+          Class: transaction
+          Name: Server
+        Address: 2.1.2.1:4
+          Class: transaction
+          Name: Server
+        Address: 2.1.1.1:1
+          Class: transaction
+          Name: Server
+    zoneId: fab8c58ff2645b9c2c9a35847b00169c
+      machineId: 61477736f3b21a809adc890fed372455
+        Address: 2.1.1.3:1
+          Class: sim_http_server
+          Name: Server
+FDBD joined cluster.
+FDBD joined cluster.
+setting up test (ChangeConfig)...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+running test (ChangeConfig)...
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+checking test (ChangeConfig)...
+fetching metrics (ChangeConfig)...
+Set perpetual_storage_wiggle=0 ...
+Set perpetual_storage_wiggle=0 Done.
+Disabling backup worker ...
+Disabled backup worker.
+Consistency scan already complete.
+Set perpetual_storage_wiggle=1 ...
+Set perpetual_storage_wiggle=1 Done.
+Enabling backup worker ...
+Enabled backup worker.
+Enabling consistency scan ...
+Enabled consistency scan.
+Run test:RestoreValidationSimple start
+setting up test (RestoreValidationSimple)...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+running test (RestoreValidationSimple)...
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+HTTP: removing ip 2.0.1.6 for alwaysfail_donotuse:80
+Process 2.0.1.6 run http server
+HTTP: adding address 2.0.1.6:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+HTTP: removing ip 2.0.1.5 for alwaysfail_donotuse:80
+Process 2.0.1.5 run http server
+HTTP: adding address 2.0.1.5:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+Backup Description
+URL: file://simfdb/backups/backup-1969-12-31-16-03-53.777294
+Restorable: true
+Partitioned logs: false
+File-level encryption: false
+Snapshot:  startVersion=1105898451 (1969/12/31.16:04:28-0800)  endVersion=1105898451 (1969/12/31.16:04:28-0800)  totalBytes=1440101  restorable=true  expiredPct=0.00
+SnapshotBytes: 1440101
+UnreliableEndVersion:    0 (unknown)
+MinLogBeginVersion:      1074410338 (1969/12/31.16:03:57-0800)
+ContiguousLogEndVersion: 1114410338 (1969/12/31.16:04:37-0800)
+MaxLogEndVersion:        1114410338 (1969/12/31.16:04:37-0800)
+MinRestorableVersion:    1105898451 (1969/12/31.16:04:28-0800)
+MaxRestorableVersion:    1114410337 (1969/12/31.16:04:37-0800)
+Restoring backup to version: 1114410337
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: queued  Blocks: 0/0  BlocksInProgress: 0  Files: 0  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: starting  Blocks: 0/0  BlocksInProgress: 0  Files: 0  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 0  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 0  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 262160  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 0/2  BlocksInProgress: 2  Files: 2  BytesWritten: 262160  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 1/2  BlocksInProgress: 1  Files: 2  BytesWritten: 326240  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 1/2  BlocksInProgress: 1  Files: 2  BytesWritten: 326240  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 1/2  BlocksInProgress: 1  Files: 2  BytesWritten: 326240  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 1/2  BlocksInProgress: 1  Files: 2  BytesWritten: 588400  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 1/2  BlocksInProgress: 1  Files: 2  BytesWritten: 588400  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 8511887  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 8511887  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 8511887  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 8511887  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: running  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 8511887  LastError: None
+Tag: default_restore  UID: a56079b59fea2c1618f5d14e9f74671d  State: completed  Blocks: 2/2  BlocksInProgress: 0  Files: 2  BytesWritten: 1200000  ApplyVersionLag: 0  LastError: None
+Cycle;BackupAndRestoreValidation;RestoreValidation;RandomClogging;Rollback;Attrition;Attrition complete
+RestoreValidationSimple complete
+checking test (RestoreValidationSimple)...
+fetching metrics (RestoreValidationSimple)...
+Metric (0, 0): Cycle.Transactions, 109.000000, 109
+Metric (0, 1): Cycle.Retries, 89.000000, 89
+Metric (0, 2): Cycle.Retries.too_old, 39.000000, 39
+Metric (0, 3): Cycle.Retries.commit_failed, 2.000000, 2
+Metric (0, 4): Cycle.Avg Latency (ms), 12428.469877, 1.24e+04
+Metric (0, 5): Cycle.Read rows/simsec (approx), 10.900000, 10.9
+Metric (0, 6): Cycle.Write rows/simsec (approx), 14.533333, 14.5
+Metric (1, 0): Cycle.Transactions, 264.000000, 264
+Metric (1, 1): Cycle.Retries, 125.000000, 125
+Metric (1, 2): Cycle.Retries.too_old, 37.000000, 37
+Metric (1, 3): Cycle.Retries.commit_failed, 5.000000, 5
+Metric (1, 4): Cycle.Avg Latency (ms), 8943.129980, 8.94e+03
+Metric (1, 5): Cycle.Read rows/simsec (approx), 26.400000, 26.4
+Metric (1, 6): Cycle.Write rows/simsec (approx), 35.200000, 35.2
+Metric (2, 0): Cycle.Transactions, 230.000000, 230
+Metric (2, 1): Cycle.Retries, 111.000000, 111
+Metric (2, 2): Cycle.Retries.too_old, 40.000000, 40
+Metric (2, 3): Cycle.Retries.commit_failed, 10.000000, 10
+Metric (2, 4): Cycle.Avg Latency (ms), 9619.058367, 9.62e+03
+Metric (2, 5): Cycle.Read rows/simsec (approx), 23.000000, 23
+Metric (2, 6): Cycle.Write rows/simsec (approx), 30.666667, 30.7
+Metric (3, 0): Cycle.Transactions, 71.000000, 71
+Metric (3, 1): Cycle.Retries, 72.000000, 72
+Metric (3, 2): Cycle.Retries.too_old, 36.000000, 36
+Metric (3, 3): Cycle.Retries.commit_failed, 1.000000, 1
+Metric (3, 4): Cycle.Avg Latency (ms), 11781.642544, 1.18e+04
+Metric (3, 5): Cycle.Read rows/simsec (approx), 7.100000, 7.1
+Metric (3, 6): Cycle.Write rows/simsec (approx), 9.466667, 9.47
+Metric (4, 0): Cycle.Transactions, 252.000000, 252
+Metric (4, 1): Cycle.Retries, 70.000000, 70
+Metric (4, 2): Cycle.Retries.too_old, 4.000000, 4
+Metric (4, 3): Cycle.Retries.commit_failed, 8.000000, 8
+Metric (4, 4): Cycle.Avg Latency (ms), 9292.196755, 9.29e+03
+Metric (4, 5): Cycle.Read rows/simsec (approx), 25.200000, 25.2
+Metric (4, 6): Cycle.Write rows/simsec (approx), 33.600000, 33.6
+Metric (5, 0): Cycle.Transactions, 214.000000, 214
+Metric (5, 1): Cycle.Retries, 114.000000, 114
+Metric (5, 2): Cycle.Retries.too_old, 55.000000, 55
+Metric (5, 3): Cycle.Retries.commit_failed, 10.000000, 10
+Metric (5, 4): Cycle.Avg Latency (ms), 10841.576425, 1.08e+04
+Metric (5, 5): Cycle.Read rows/simsec (approx), 21.400000, 21.4
+Metric (5, 6): Cycle.Write rows/simsec (approx), 28.533333, 28.5
+Test complete
+6 test clients passed; 0 test clients failed
+Consistency scan complete.
+Consistency scan done
+Running urgent consistency check...
+Urgent consistency check done
+Running consistency check...
+setting up test (ConsistencyCheck)...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Set perpetual_storage_wiggle=0 ...
+Set perpetual_storage_wiggle=0 Done.
+Disabling backup worker ...
+Disabled backup worker.
+Consistency scan already complete.
+running test (ConsistencyCheck)...
+ConsistencyCheck complete
+ConsistencyCheck complete
+ConsistencyCheck complete
+ConsistencyCheck complete
+ConsistencyCheck complete
+ConsistencyCheck complete
+ConsistencyCheck complete
+checking test (ConsistencyCheck)...
+fetching metrics (ConsistencyCheck)...
+Consistency check done
+6 test clients passed; 0 test clients failed
+Run test:RestoreValidationSimple Done.
+
+1 tests passed; 0 tests failed.
+Waiting for DD to end...
+Set perpetual_storage_wiggle=0 ...
+Set perpetual_storage_wiggle=0 Done.
+Disabling backup worker ...
+Disabled backup worker.
+Consistency scan already complete.
+
+Unseed: 68479
+Elapsed: 660.532322 simsec, 75.810634 real seconds

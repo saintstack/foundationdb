@@ -1,0 +1,181 @@
+Random seed is 2994805479...
+DeterministicRandom successfully bound to OpenSSL RNG
+sim http machines = 1
+Datacenter 0: 4/12 machines, 1/1 coordinators, 1 other machines
+sim http machines = 3
+Datacenter 1: 4/12 machines, 0/1 coordinators, 3 other machines
+sim http machines = 3
+Datacenter 2: 4/12 machines, 0/1 coordinators, 3 other machines
+Process 2.1.1.6 run http server
+SimHTTPServer protecting 2.1.1.6:1
+HTTP: adding address 2.1.1.6:5000 for alwaysfail_donotuse:80
+Process 2.2.1.4 run http server
+HTTP: adding address 2.2.1.4:5000 for alwaysfail_donotuse:80
+Process 2.2.1.5 run http server
+HTTP: adding address 2.2.1.5:5000 for alwaysfail_donotuse:80
+Process 2.0.1.4 run http server
+HTTP: adding address 2.0.1.4:5000 for alwaysfail_donotuse:80
+Process 2.2.1.6 run http server
+HTTP: adding address 2.2.1.6:5000 for alwaysfail_donotuse:80
+Process 2.1.1.5 run http server
+HTTP: adding address 2.1.1.5:5000 for alwaysfail_donotuse:80
+Process 2.1.1.4 run http server
+HTTP: adding address 2.1.1.4:5000 for alwaysfail_donotuse:80
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+FDBD joined cluster.
+startingConfiguration:new backup_worker_enabled:=1 encryption_at_rest_mode=disabled log_engine=ssd-2 log_spill:=2 logs:=6 perpetual_storage_wiggle:=0 perpetual_storage_wiggle_engine=none triple storage_engine=ssd-rocksdb-v1 storage_migration_type=disabled tenant_mode=disabled usable_regions:=1 start
+useDB: true
+Simulated Cluster Topology:
+===========================
+    zoneId: 35b64c7865c957b14d760baba6e6d48f
+      machineId: 35b64c7865c957b14d760baba6e6d48f
+        Address: 3.4.3.4:1
+          Class: test
+          Name: Server
+    zoneId: 4029c569a5a7f93502050c51b6279858
+      machineId: 4029c569a5a7f93502050c51b6279858
+        Address: 3.4.3.1:1
+          Class: test
+          Name: Server
+    zoneId: 602047ea7892426c9132b725fa1743c3
+      machineId: 602047ea7892426c9132b725fa1743c3
+        Address: 3.4.3.2:1
+          Class: test
+          Name: Server
+    zoneId: b2c7dbcfd0511f812fb541e04562f3cc
+      machineId: f826ee6c47293f478ec8c7a214a52ad1
+        Address: 1.1.1.1:1
+          Class: test
+          Name: TestSystem
+    zoneId: ddd1bd572811d80c42469f9708614b38
+      machineId: ddd1bd572811d80c42469f9708614b38
+        Address: 3.4.3.3:1
+          Class: test
+          Name: Server
+dcId: 0
+  dataHallId: 0
+    zoneId: 6dd77f7241612e163029f677d4c01e83
+      machineId: 2a4bc6f8d1e391e8c3f57a0a57c6c581
+        Address: 2.0.1.3:1
+          Class: unset
+          Name: Server
+    zoneId: a4132879bf0effaaad67d1688543476f
+      machineId: 81a02530f057c1b474dc89251bb7d567
+        Address: 2.0.1.1:1
+          Class: storage
+          Name: Server
+    zoneId: be1c491c9d418f437f48332d769d02d4
+      machineId: 39e779d786447ea76818eec76d92eabd
+        Address: 2.0.1.4:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: f30c207799232ae9a8f38bf9ce5159ee
+      machineId: cfd18d2a7480bb0caae98aa258f7ed3b
+        Address: 2.0.1.2:1
+          Class: storage
+          Name: Server
+    zoneId: f388276b60dd95da6318c4432ca0634e
+      machineId: 5f97ac0be37a74f93b000e357d76aa98
+        Address: 2.0.1.0:1
+          Class: unset
+          Name: Server
+dcId: 1
+  dataHallId: 1
+    zoneId: 24e27d0f044fa919cb9fdf1e5a6ae012
+      machineId: 273a58832b7fef8e6d67f626fb45fe83
+        Address: 2.1.1.4:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 59efa0e3357a3f40cb0ca903f094561a
+      machineId: 9832ba83865add6a95d8a50838b38268
+        Address: 2.1.1.5:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 89bc2b3de4f4624be8b64f902cb71178
+      machineId: 4e8934995878ab54440119213ad499df
+        Address: 2.1.1.0:1
+          Class: unset
+          Name: Server
+    zoneId: 95d31b8bee59549065c9479c0f7bb23b
+      machineId: a96ad9173afd6e49fe7c7666525d4361
+        Address: 2.1.1.6:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: bef1a708f96ae7444cb3d1a4cd6a5c42
+      machineId: cddb0aef38fd103789f81ba32326feb3
+        Address: 2.1.1.1:1
+          Class: transaction
+          Name: Server
+    zoneId: f8fdd107bf8fb221c5539eb1b471206f
+      machineId: 693cb679ba7eb63c1819d4c1ad81c002
+        Address: 2.1.1.3:1
+          Class: transaction
+          Name: Server
+    zoneId: fed316fdd219882ce0cd65f0044d3597
+      machineId: 56501215b23928477dfeacba3914d336
+        Address: 2.1.1.2:1
+          Class: storage
+          Name: Server
+dcId: 2
+  dataHallId: 2
+    zoneId: 1b30d9908b70256e4d39ec1a58797060
+      machineId: 71e73315f069be67242d2038d273d2aa
+        Address: 2.2.1.0:1
+          Class: transaction
+          Name: Server
+    zoneId: 440d8cbfe21b7b0be83151ad0404c33c
+      machineId: b828a26e3e88d803c19fc85cd6a843f4
+        Address: 2.2.1.5:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 50c0560743ca8c6d37873161949469f3
+      machineId: 280299278e36f3269c5462c5879398b0
+        Address: 2.2.1.6:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: 80e6dfdc1e1a2a7390192cfd112a8e20
+      machineId: a0f61d7fd3109b61e1bcf40ffad8e5ba
+        Address: 2.2.1.4:1
+          Class: sim_http_server
+          Name: Server
+    zoneId: b8ab5153bfcf781cf633152356e66245
+      machineId: 7c0385d68a200a5f1c54405aeb45f06c
+        Address: 2.2.1.1:1
+          Class: transaction
+          Name: Server
+    zoneId: e08b2cb6f0ae395f0de9ca30c22647bc
+      machineId: 1b703f7209236a299fa25ca89edae544
+        Address: 2.2.1.2:1
+          Class: storage
+          Name: Server
+    zoneId: e2c4ba6b908f7dd1f2a618acf4ef726f
+      machineId: eb2d737fa81e3721759e55223a9886cb
+        Address: 2.2.1.3:1
+          Class: transaction
+          Name: Server
+FDBD joined cluster.
+FDBD joined cluster.
+setting up test (ChangeConfig)...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+Test received trigger for setup...
+running test (ChangeConfig)...
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ChangeConfig complete
+ERROR: Out of memory
