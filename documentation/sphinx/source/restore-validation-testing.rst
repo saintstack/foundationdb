@@ -366,95 +366,8 @@ Verify Cleanup
     fdb> getrange "\xff\x02/rlog/" "\xff\x02/rlog0"
     # Should return empty
 
-Quick Test Script
-=================
-
-Here's a complete test script you can run::
-
-    #!/bin/bash
-    set -e
-
-    CLUSTER=~/fdb_test.cluster
-    FDBCLI=~/build_output/bin/fdbcli
-    FDBSERVER=~/build_output/bin/fdbserver
-    FDBBACKUP=~/build_output/bin/fdbbackup
-    FDBRESTORE=~/build_output/bin/fdbrestore
-    BACKUP_DIR=file:///Users/stack/fdb_backup_test
-    DATA_DIR=~/fdb_test_data
-
-    echo "=== Step 0: Setup cluster ==="
-    mkdir -p $DATA_DIR
-    echo "test:test@127.0.0.1:4500" > $CLUSTER
-
-    # Start main server with validation knobs (lowercase!)
-    $FDBSERVER -p 127.0.0.1:4500 -d $DATA_DIR \
-      -C $CLUSTER \
-      --knob-restore_validation_enabled=1 \
-      --knob-restore_validation=1 &
-    sleep 3
-
-    # Configure database
-    $FDBCLI -C $CLUSTER --exec "configure new single memory"
-    sleep 2
-
-    # Start backup agent (required for backups)
-    backup_agent -C $CLUSTER &
-    sleep 2
-
-    echo "=== Step 1: Write test data ==="
-    $FDBCLI -C $CLUSTER --exec "writemode on; set test1 value1; set test2 value2; set test3 value3"
-
-    echo "=== Step 2: Create backup ==="
-    $FDBBACKUP start -C $CLUSTER -d $BACKUP_DIR -z
-    echo "Waiting for backup to become restorable..."
-    sleep 15
-    $FDBBACKUP discontinue -C $CLUSTER
-    sleep 2
-    $FDBBACKUP wait -C $CLUSTER
-    echo "Backup status:"
-    $FDBBACKUP status -C $CLUSTER
-
-    echo "=== Step 3: Restore to validation prefix ==="
-    $FDBRESTORE start -r $BACKUP_DIR \
-      --dest-cluster-file $CLUSTER \
-      --add-prefix "\\xff\\x02/rlog/" \
-      -w
-
-    echo "=== Step 4: Verify restored data ==="
-    $FDBCLI -C $CLUSTER --exec "option on ACCESS_SYSTEM_KEYS; getrange \"\\xff\\x02/rlog/\" \"\\xff\\x02/rlog0\" 5"
-
-    echo "=== Step 5: Run validation ==="
-    AUDIT_ID=$($FDBCLI -C $CLUSTER --exec "audit_storage validate_restore \"\" \"\\xff\"" 2>&1 | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
-    echo "Audit ID: $AUDIT_ID"
-
-    echo "=== Step 6: Wait and check results ==="
-    sleep 5
-    $FDBCLI -C $CLUSTER --exec "get_audit_status validate_restore id $AUDIT_ID"
-
-    echo "=== Step 7: Cleanup ==="
-    $FDBCLI -C $CLUSTER --exec "option on ACCESS_SYSTEM_KEYS; writemode on; clearrange \"\\xff\\x02/rlog/\" \"\\xff\\x02/rlog0\""
-
-    # Stop servers
-    pkill -9 fdbserver
-
-    echo "=== Test Complete! ==="
-
-Save this as ``test_restore_validation.sh``, make it executable, and run::
-
-    chmod +x test_restore_validation.sh
-    ./test_restore_validation.sh
-
 Troubleshooting
 ===============
-
-"not_implemented" Error
-------------------------
-
-**Symptom**: Validation immediately fails with "not implemented"
-
-**Cause**: Build didn't include the updated storageserver.actor.cpp
-
-**Fix**: Rebuild fdbserver and restart
 
 "restore_destination_not_empty" Error
 --------------------------------------
@@ -557,50 +470,6 @@ Validation Completes but No Logs
     ls -ltr /var/log/foundationdb/
     ls -ltr ~/fdb_test_data/*.log
 
-Advanced Testing
-================
-
-Test with Simulation
----------------------
-
-Create a simulation test file ``RestoreValidationTest.toml``::
-
-    [[test]]
-    testTitle = 'RestoreValidationTest'
-    timeout = 7200
-
-    [[test.workload]]
-    testName = 'BackupS3BlobCorrectness'
-    backupURL = 's3://simulation-backup/'
-    # Add your test parameters
-
-Run::
-
-    ~/build_output/bin/fdbserver -r simulation -f RestoreValidationTest.toml
-
-Test with Different Key Ranges
--------------------------------
-
-::
-
-    # Test a specific range
-    fdb> audit_storage validate_restore "a" "m"
-
-    # Test with binary keys
-    fdb> audit_storage validate_restore "\x00" "\x10"
-
-Load Testing
-------------
-
-::
-
-    # Write lots of data
-    for i in {1..10000}; do
-      echo "set key_$i value_$i" | fdbcli -C $CLUSTER --exec
-    done
-
-    # Then backup, restore, and validate
-
 Expected Performance
 ====================
 
@@ -609,28 +478,3 @@ Expected Performance
 - **Large dataset (1M+ keys)**: Hours (rate limited)
 
 Rate limiting is controlled by ``AUDIT_STORAGE_RATE_PER_SERVER_MAX`` (default: 50MB/s per server).
-
-Success Criteria
-================
-
-✅ Validation should:
-
-1. Complete without errors for matching data
-2. Detect value mismatches
-3. Detect missing keys in restored data
-4. Report progress correctly
-5. Persist audit state across failures
-6. Work on any key range within normalKeys
-
-Next Steps
-==========
-
-After manual testing succeeds:
-
-1. Run simulation tests
-2. Test with production backup data (in staging)
-3. Test with large datasets
-4. Test failure scenarios (server crashes during validation)
-5. Performance benchmarking
-
-Good luck! 🚀
