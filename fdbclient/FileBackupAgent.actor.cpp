@@ -2496,8 +2496,9 @@ struct BackupRangeTaskFunc : BackupTaskFuncBase {
 
 		// When a key range task saves the last chunk of progress and then the executor dies, when the task
 		// continues its beginKey and endKey will be equal but there is no work to be done.
-		if (beginKey == endKey)
+		if (beginKey == endKey) {
 			return Void();
+		}
 
 		// Find out if there is a shard boundary in(beginKey, endKey)
 		Standalone<VectorRef<KeyRef>> keys = wait(runRYWTransaction(
@@ -3195,6 +3196,11 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 
 							// Range tasks during the initial snapshot should run at a higher priority
 							int priority = latestSnapshotEndVersion.present() ? 0 : 1;
+							TraceEvent("BackupDispatcherCreatingTask")
+							    .detail("RangeBegin", printable(range.begin))
+							    .detail("RangeEnd", printable(range.end))
+							    .detail("Priority", priority)
+							    .detail("ScheduledVersion", scheduledVersion);
 							addTaskFutures.push_back(
 							    success(BackupRangeTaskFunc::addTask(tr,
 							                                         taskBucket,
@@ -3286,6 +3292,17 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// snapshot dispatch task. In either case, the task should wait for snapshotBatchFuture. The snapshot done
 		// key, passed to the current task, is also passed on.
 		if (Params.snapshotFinished().getOrDefault(task, false)) {
+			// CRITICAL FIX: Verify that all dispatched tasks in the batch have actually completed
+			// before proceeding to the manifest phase. Without this check, the backup can finish
+			// prematurely while tasks are still running, resulting in incomplete backups.
+			bool batchComplete = wait(snapshotBatchFuture->isSet(tr));
+			if (!batchComplete) {
+				TraceEvent(SevWarnAlways, "BackupSnapshotFinishedButBatchIncomplete")
+				    .detail("BackupUID", config.getUid())
+				    .detail("BatchFutureKey", snapshotBatchFutureKey)
+				    .detail("DispatchDoneKey", snapshotBatchDispatchDoneKey);
+			}
+
 			wait(success(addSnapshotManifestTask(
 			    tr, taskBucket, task, TaskCompletionKey::signal(snapshotFinishedFuture), snapshotBatchFuture)));
 		} else {
@@ -4541,21 +4558,24 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 						tr->set(data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get()),
 						        data[i].value);
 					}
-					
-				TraceEvent("FileRestoreRangeWrite")
-				    .detail("RestoreUID", restore.getUid())
-				    .detail("KeysWritten", iend - start)
-				    .detail("FirstDataKey", printable(data[start].key))
-				    .detail("LastDataKey", printable(data[iend - 1].key))
-				    .detail("FirstRestoredKey", printable(data[start].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
-				    .detail("LastRestoredKey", printable(data[iend - 1].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
-				    .detail("FileRangeBegin", printable(fileRange.begin))
-				    .detail("FileRangeEnd", printable(fileRange.end))
-				    .detail("AddPrefix", printable(addPrefix.get()))
-				    .detail("RemovePrefix", printable(removePrefix.get()))
-				    .detail("DataStart", start)
-				    .detail("DataEnd", iend)
-				    .detail("TotalDataSize", end);
+
+					TraceEvent("FileRestoreRangeWrite")
+					    .detail("RestoreUID", restore.getUid())
+					    .detail("KeysWritten", iend - start)
+					    .detail("FirstDataKey", printable(data[start].key))
+					    .detail("LastDataKey", printable(data[iend - 1].key))
+					    .detail("FirstRestoredKey",
+					            printable(data[start].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail(
+					        "LastRestoredKey",
+					        printable(data[iend - 1].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail("FileRangeBegin", printable(fileRange.begin))
+					    .detail("FileRangeEnd", printable(fileRange.end))
+					    .detail("AddPrefix", printable(addPrefix.get()))
+					    .detail("RemovePrefix", printable(removePrefix.get()))
+					    .detail("DataStart", start)
+					    .detail("DataEnd", iend)
+					    .detail("TotalDataSize", end);
 
 					// Add to bytes written count
 					restore.bytesWritten().atomicOp(tr, txBytes, MutationRef::Type::AddValue);
