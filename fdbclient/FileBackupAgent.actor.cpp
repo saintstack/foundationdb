@@ -3141,6 +3141,9 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		    .detail("TimeElapsed", timeElapsed)
 		    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
 
+		// Track whether we dispatched tasks in THIS iteration
+		state bool dispatchedInThisIteration = (countShardsToDispatch > 0);
+
 		// Dispatch random shards to catch up to the expected progress
 		while (countShardsToDispatch > 0) {
 			// First select ranges to add
@@ -3282,10 +3285,11 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
-		// Only mark snapshot as finished if all shards are done.
-		// Because we now track completion (not just dispatch) via snapshotRangeFileMap,
-		// countShardsNotDone accurately reflects work that hasn't been completed yet.
-		if (countShardsNotDone == 0) {
+		// Only mark snapshot as finished if:
+		// 1. All shards are done (countShardsNotDone == 0 means all are in snapshotRangeFileMap)
+		// 2. We did NOT dispatch any tasks in this iteration (they haven't completed yet)
+		// This prevents the bug where snapshot is marked finished immediately after dispatching the last batch.
+		if (countShardsNotDone == 0 && !dispatchedInThisIteration) {
 			TraceEvent("FileBackupSnapshotDispatchFinished")
 			    .detail("BackupUID", config.getUid())
 			    .detail("AllShards", countAllShards)
