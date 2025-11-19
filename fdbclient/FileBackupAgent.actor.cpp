@@ -2982,40 +2982,10 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
-		// Remove dispatched-but-not-completed ranges from the shardMap to prevent re-dispatching them.
-		// These ranges are in-flight but not yet complete, so we skip them for selection.
-		if (dispatchBoundaries.size() > 0) {
-			state bool lastValue = false;
-			state Key lastKey;
-			for (i = 0; i < dispatchBoundaries.size(); ++i) {
-				const std::pair<Key, bool>& boundary = dispatchBoundaries[i];
-
-				// Values must alternate
-				ASSERT(boundary.second == !lastValue);
-
-				// If this was the end of a dispatched range
-				if (!boundary.second) {
-					// Mark dispatched ranges as SKIP so they won't be re-dispatched, but they're not DONE yet.
-					// If they're already marked DONE (from completedRanges above), this won't change them.
-					RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges =
-					    shardMap.modify(KeyRangeRef(lastKey, boundary.first));
-					iShard = shardRanges.begin();
-					iShardEnd = shardRanges.end();
-					for (; iShard != iShardEnd; ++iShard) {
-						// Only mark as SKIP if not already DONE (completed ranges are already DONE)
-						if (iShard->value() != DONE) {
-							iShard->value() = SKIP;
-						}
-						wait(yield());
-					}
-				}
-				lastValue = dispatchBoundaries[i].second;
-				lastKey = dispatchBoundaries[i].first;
-
-				wait(yield());
-			}
-			ASSERT(lastValue == false);
-		}
+		// DON'T mark dispatched ranges in the shardMap at all!
+		// Dispatched-but-incomplete ranges should remain as their original shard values (NOT_DONE_MIN+)
+		// so they count toward countShardsNotDone. They won't be re-dispatched because the dispatch
+		// code checks snapshotRangeDispatchMap before creating tasks (see lines 3193-3241 below).
 
 		// Set anything outside the backup ranges to SKIP.  We can use insert() here instead of modify()
 		// because it's OK to delete shard boundaries in the skipped ranges.
