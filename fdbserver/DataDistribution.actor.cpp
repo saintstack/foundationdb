@@ -3530,11 +3530,13 @@ ACTOR Future<Void> auditStorageCore(Reference<DataDistributor> self,
 					    .detail("AuditType", auditType);
 					throw retry();
 				}
-			}
-			if (!audit->foundError) {
-				audit->coreState.setPhase(AuditPhase::Complete);
-			}
 		}
+		if (!audit->foundError) {
+			audit->coreState.setPhase(AuditPhase::Complete);
+		} else {
+			audit->coreState.setPhase(AuditPhase::Error);
+		}
+	}
 		TraceEvent(SevVerbose, "DDAuditStorageCoreCompleteAudit", self->ddId)
 		    .detail("Context", audit->getDDAuditContext())
 		    .detail("AuditState", audit->coreState.toString())
