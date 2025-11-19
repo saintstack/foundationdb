@@ -2920,6 +2920,36 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
+		// Read all COMPLETED ranges (ranges that have written files)
+		// This is different from dispatched ranges - a range can be dispatched but not yet completed.
+		state std::vector<std::pair<Key, BackupConfig::RangeSlice>> completedRanges;
+		tr->reset();
+		beginKey = allKeys.begin;
+		loop {
+			try {
+				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+
+				state Future<BackupConfig::RangeFileMapT::RangeResultType> completed =
+				    config.snapshotRangeFileMap().getRange(tr, beginKey, keyAfter(allKeys.end), CLIENT_KNOBS->TOO_MANY);
+				wait(success(completed) && taskBucket->keepRunning(tr, task));
+
+				if (!completed.get().results.empty()) {
+					completedRanges.reserve(completedRanges.size() + completed.get().results.size());
+					completedRanges.insert(
+					    completedRanges.end(), completed.get().results.begin(), completed.get().results.end());
+				}
+
+				if (!completed.get().more)
+					break;
+
+				beginKey = keyAfter(completed.get().results.back().first);
+				tr->reset();
+			} catch (Error& e) {
+				wait(tr->onError(e));
+			}
+		}
+
 		// The next few sections involve combining the results above.  Yields are used after operations
 		// that could have operated on many thousands of things and in loops which could have many
 		// thousands of iterations.
@@ -2928,8 +2958,32 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShard;
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShardEnd;
 
-		// Set anything inside a dispatched range to DONE.
-		// Also ensure that the boundary value are true, false, [true, false]...
+		// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
+		// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
+		// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
+		// until they've actually written their backup files to snapshotRangeFileMap.
+		if (completedRanges.size() > 0) {
+			for (i = 0; i < completedRanges.size(); ++i) {
+				const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
+				// The range file map stores entries by end key, with the begin key in the value
+				Key endKey = entry.first;
+				Key beginKey = entry.second.begin;
+
+				// Mark all shard ranges in this completed range as DONE
+				RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
+				iShard = shardRanges.begin();
+				iShardEnd = shardRanges.end();
+				for (; iShard != iShardEnd; ++iShard) {
+					iShard->value() = DONE;
+					wait(yield());
+				}
+
+				wait(yield());
+			}
+		}
+
+		// Remove dispatched-but-not-completed ranges from the shardMap to prevent re-dispatching them.
+		// These ranges are in-flight but not yet complete, so we skip them for selection.
 		if (dispatchBoundaries.size() > 0) {
 			state bool lastValue = false;
 			state Key lastKey;
@@ -2941,14 +2995,17 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 
 				// If this was the end of a dispatched range
 				if (!boundary.second) {
-					// Ensure that the dispatched boundaries exist AND set all shard ranges in the dispatched range
-					// to DONE.
+					// Mark dispatched ranges as SKIP so they won't be re-dispatched, but they're not DONE yet.
+					// If they're already marked DONE (from completedRanges above), this won't change them.
 					RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges =
 					    shardMap.modify(KeyRangeRef(lastKey, boundary.first));
 					iShard = shardRanges.begin();
 					iShardEnd = shardRanges.end();
 					for (; iShard != iShardEnd; ++iShard) {
-						iShard->value() = DONE;
+						// Only mark as SKIP if not already DONE (completed ranges are already DONE)
+						if (iShard->value() != DONE) {
+							iShard->value() = SKIP;
+						}
 						wait(yield());
 					}
 				}
@@ -3101,6 +3158,8 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 				while (1) {
 					if (it->value() >= NOT_DONE_MIN) {
 						rangesToAdd.push_back(it->range());
+						// Mark as dispatching to prevent re-selection in this loop.
+						// Note: This doesn't mean the task is DONE, just that we're queuing it for dispatch.
 						it->value() = DONE;
 						shardMap.coalesce(Key(it->begin()));
 						++added;
@@ -3223,8 +3282,9 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
-		// Only mark snapshot as finished if all shards are done AND we didn't dispatch any new tasks
-		// in this iteration. If we just dispatched tasks, they haven't completed yet.
+		// Only mark snapshot as finished if all shards are done.
+		// Because we now track completion (not just dispatch) via snapshotRangeFileMap,
+		// countShardsNotDone accurately reflects work that hasn't been completed yet.
 		if (countShardsNotDone == 0) {
 			TraceEvent("FileBackupSnapshotDispatchFinished")
 			    .detail("BackupUID", config.getUid())
