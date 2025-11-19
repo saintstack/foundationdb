@@ -581,15 +581,6 @@ ACTOR Future<Void> readCommitted(Database cx,
 
 			state RangeResult values = wait(tr.getRange(begin, end, limits));
 
-			TraceEvent("BackupReadCommittedBatch")
-			    .detail("BeginKey", printable(begin.getKey()))
-			    .detail("EndKey", printable(end.getKey()))
-			    .detail("ResultSize", values.size())
-			    .detail("ResultBytes", values.expectedSize())
-			    .detail("ResultMore", values.more)
-			    .detail("FirstKey", values.size() > 0 ? printable(values[0].key) : "")
-			    .detail("LastKey", values.size() > 0 ? printable(values.end()[-1].key) : "");
-
 			// When this buggify line is enabled, if there are more than 1 result then use half of the results
 			// Copy the data instead of messing with the results directly to avoid TSS issues.
 			if (values.size() > 1 && BUGGIFY) {
