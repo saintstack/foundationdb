@@ -14,7 +14,7 @@ buggify = false
 faultInjection = false
 generateFearless = false
 minimumRegions = 1
-config = "single usable_regions=1 storage_engine=ssd-2"
+config = "single usable_regions=1 storage_engine=ssd-2 tenant_mode=disabled"
 
 [[knobs]]
 restore_validation_enabled = 1

@@ -3509,37 +3509,6 @@ ACTOR Future<Void> auditStorageCore(Reference<DataDistributor> self,
 					    .detail("AuditType", auditType);
 					throw retry();
 				}
-				// Final check: scan all range states to check for errors
-				// This catches errors that were persisted after dispatch completed
-				state Key finalCheckBegin = audit->coreState.range.begin;
-				while (finalCheckBegin < audit->coreState.range.end) {
-					state KeyRange finalCheckRange = KeyRangeRef(finalCheckBegin, audit->coreState.range.end);
-					state std::vector<AuditStorageState> finalStates =
-					    wait(getAuditStateByRange(self->txnProcessor->context(),
-					                              audit->coreState.getType(),
-					                              audit->coreState.id,
-					                              finalCheckRange));
-					for (int j = 0; j < finalStates.size(); j++) {
-						if (finalStates[j].getPhase() == AuditPhase::Error) {
-							audit->foundError = true;
-							if (audit->coreState.error.empty() && !finalStates[j].error.empty()) {
-								audit->coreState.error = finalStates[j].error;
-							}
-							break;
-						}
-					}
-					if (!finalStates.empty()) {
-						finalCheckBegin = finalStates.back().range.end;
-					} else {
-						break;
-					}
-					if (audit->foundError) {
-						break;
-					}
-				}
-				if (audit->foundError) {
-					audit->coreState.setPhase(AuditPhase::Error);
-				}
 			} else if (audit->coreState.getType() == AuditType::ValidateLocationMetadata) {
 				bool allFinish = wait(checkAuditProgressCompleteByRange(
 				    self->txnProcessor->context(), audit->coreState.getType(), audit->coreState.id, allKeys));
@@ -4742,6 +4711,14 @@ ACTOR Future<Void> doAuditOnStorageServer(Reference<DataDistributor> self,
 			throw e;
 		} else if (e.code() == error_code_audit_storage_error) {
 			audit->foundError = true;
+		} else if (e.code() == error_code_wrong_shard_server) {
+			// wrong_shard_server means stale shard location data
+			// Don't retry within DD - throw to let workload retry at higher level
+			if (audit->retryCount >= 3) {
+				throw audit_storage_cancelled(); // Let workload retry with fresh DD dispatch
+			}
+			audit->retryCount++;
+			audit->actors.add(scheduleAuditOnRange(self, audit, req.range));
 		} else if (audit->retryCount >= SERVER_KNOBS->AUDIT_RETRY_COUNT_MAX) {
 			throw audit_storage_failed();
 		} else {

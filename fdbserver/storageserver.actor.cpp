@@ -4565,13 +4565,31 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 	    .detail("Limit", limit)
 	    .detail("LimitBytes", limitBytes);
 
-	// Read source data from user key range
+	// Read source data from user key range (this SS must own it since DD sent request here)
 	state Future<ErrorOr<GetKeyValuesReply>> sourceFuture =
 	    issueGetKeyValuesRequest(data, rangeToRead, version, limit, limitBytes);
 
 	// Read restored data from system key space
-	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture =
-	    issueGetKeyValuesRequest(data, restoredRange, version, limit, limitBytes);
+	// NOTE: Use database transaction to read system keys since this SS might not own them
+	state ErrorOr<GetKeyValuesReply> restoredResult;
+	try {
+		state Transaction tr(data->cx);
+		tr.setVersion(version);
+		tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+		tr.setOption(FDBTransactionOptions::LOCK_AWARE);
+		state RangeResult restoredData = wait(tr.getRange(restoredRange, limit, Snapshot::False, Reverse::False));
+		
+		// Convert RangeResult to GetKeyValuesReply format
+		GetKeyValuesReply restoredReply;
+		restoredReply.data.append_deep(restoredReply.arena, restoredData.begin(), restoredData.size());
+		restoredReply.more = restoredData.more;
+		restoredReply.version = version;
+		restoredResult = restoredReply;
+	} catch (Error& e) {
+		restoredResult = e;
+	}
+	
+	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture = Future<ErrorOr<GetKeyValuesReply>>(restoredResult);
 
 	wait(success(sourceFuture) && success(restoredFuture));
 
@@ -4866,6 +4884,11 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 	} catch (Error& e) {
 		if (e.code() == error_code_actor_cancelled) {
 			throw e;
+		}
+		// Send retryable errors back to DD so it can retry with correct SS
+		if (e.code() == error_code_wrong_shard_server) {
+			req.reply.sendError(e);
+			return Void();
 		}
 		res.setPhase(AuditPhase::Error);
 		res.error = e.what();
