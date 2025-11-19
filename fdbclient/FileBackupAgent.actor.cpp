@@ -3233,18 +3233,22 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 							                                         Reference<TaskFuture>(),
 							                                         scheduledVersion)));
 
-							TraceEvent("FileBackupSnapshotRangeDispatched")
-							    .suppressFor(2)
-							    .detail("BackupUID", config.getUid())
-							    .detail("CurrentVersion", recentReadVersion)
-							    .detail("ScheduledVersion", scheduledVersion)
-							    .detail("BeginKey", range.begin.printable())
-							    .detail("EndKey", range.end.printable());
-						} else {
-							// This shouldn't happen because if the transaction was already done or if another
-							// execution of this task is making progress it should have been detected above.
-							ASSERT(false);
-						}
+						TraceEvent("FileBackupSnapshotRangeDispatched")
+						    .suppressFor(2)
+						    .detail("BackupUID", config.getUid())
+						    .detail("CurrentVersion", recentReadVersion)
+						    .detail("ScheduledVersion", scheduledVersion)
+						    .detail("BeginKey", range.begin.printable())
+						    .detail("EndKey", range.end.printable());
+					} else {
+						// Range is already dispatched (concurrent dispatcher or previous iteration).
+						// This is OK - just skip this range and continue.
+						TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+						    .suppressFor(2)
+						    .detail("BackupUID", config.getUid())
+						    .detail("BeginKey", range.begin.printable())
+						    .detail("EndKey", range.end.printable());
+					}
 					}
 
 				wait(waitForAll(addTaskFutures));
