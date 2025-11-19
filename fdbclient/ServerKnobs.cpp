@@ -1047,6 +1047,8 @@ void ServerKnobs::initialize(Randomize randomize, ClientKnobs* clientKnobs, IsSi
 	init( AUDIT_DATAMOVE_POST_CHECK_RETRY_COUNT_MAX,              50 );
 	init( AUDIT_STORAGE_RATE_PER_SERVER_MAX,                    50e6 ); // per second
 	init( ENABLE_AUDIT_VERBOSE_TRACE,                          false );
+	init( RESTORE_VALIDATION_ENABLED,                          false ); if ( isSimulated ) RESTORE_VALIDATION_ENABLED = deterministicRandom()->coinflip();
+	init( RESTORE_VALIDATION,                                  false ); // Bypass empty cluster check when validating restored data
 	init( LOGGING_STORAGE_COMMIT_WHEN_IO_TIMEOUT,               true );
 	init( LOGGING_RECENT_STORAGE_COMMIT_SIZE,                     20 );
 	init( LOGGING_COMPLETE_STORAGE_COMMIT_PROBABILITY,         0.001 );

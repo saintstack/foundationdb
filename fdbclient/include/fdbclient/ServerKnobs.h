@@ -1120,6 +1120,8 @@ public:
 	int AUDIT_DATAMOVE_POST_CHECK_RETRY_COUNT_MAX;
 	int AUDIT_STORAGE_RATE_PER_SERVER_MAX;
 	bool ENABLE_AUDIT_VERBOSE_TRACE;
+	bool RESTORE_VALIDATION_ENABLED; // Enable restore validation feature that compares restored data with source
+	bool RESTORE_VALIDATION; // Bypass empty cluster check when validating restored data
 	bool LOGGING_STORAGE_COMMIT_WHEN_IO_TIMEOUT;
 	double LOGGING_COMPLETE_STORAGE_COMMIT_PROBABILITY;
 	int LOGGING_RECENT_STORAGE_COMMIT_SIZE;

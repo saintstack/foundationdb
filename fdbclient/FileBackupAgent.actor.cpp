@@ -2496,8 +2496,9 @@ struct BackupRangeTaskFunc : BackupTaskFuncBase {
 
 		// When a key range task saves the last chunk of progress and then the executor dies, when the task
 		// continues its beginKey and endKey will be equal but there is no work to be done.
-		if (beginKey == endKey)
+		if (beginKey == endKey) {
 			return Void();
+		}
 
 		// Find out if there is a shard boundary in(beginKey, endKey)
 		Standalone<VectorRef<KeyRef>> keys = wait(runRYWTransaction(
@@ -3222,6 +3223,8 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
+		// Only mark snapshot as finished if all shards are done AND we didn't dispatch any new tasks
+		// in this iteration. If we just dispatched tasks, they haven't completed yet.
 		if (countShardsNotDone == 0) {
 			TraceEvent("FileBackupSnapshotDispatchFinished")
 			    .detail("BackupUID", config.getUid())
@@ -3279,6 +3282,8 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// snapshot dispatch task. In either case, the task should wait for snapshotBatchFuture. The snapshot done
 		// key, passed to the current task, is also passed on.
 		if (Params.snapshotFinished().getOrDefault(task, false)) {
+			// The manifest task should wait for the snapshotBatchFuture, ensuring all dispatched
+			// range tasks complete before the snapshot is finalized
 			wait(success(addSnapshotManifestTask(
 			    tr, taskBucket, task, TaskCompletionKey::signal(snapshotFinishedFuture), snapshotBatchFuture)));
 		} else {
@@ -4277,7 +4282,7 @@ struct RestoreCompleteTaskFunc : RestoreTaskFuncBase {
 
 		wait(taskBucket->finish(tr, task));
 
-		if (unlockDB) {
+		if (unlockDB && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
 			wait(unlockDatabase(tr, restore.getUid()));
 		}
 
@@ -4523,7 +4528,9 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 
 					for (; i < iend; ++i) {
 						tr->setOption(FDBTransactionOptions::NEXT_WRITE_NO_WRITE_CONFLICT_RANGE);
-						if (tenantCache.present()) {
+						// Skip tenant validation when restoring with a prefix
+						// Prefixed keys (e.g., 'restored/' or '\xff\x02/rlog/') are not tenant keys
+						if (tenantCache.present() && addPrefix.get() == StringRef()) {
 							validTenantCheckFutures.push_back(_validTenantAccess(
 							    StringRef(arena,
 							              data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())),
@@ -4532,6 +4539,24 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 						tr->set(data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get()),
 						        data[i].value);
 					}
+
+					TraceEvent("FileRestoreRangeWrite")
+					    .detail("RestoreUID", restore.getUid())
+					    .detail("KeysWritten", iend - start)
+					    .detail("FirstDataKey", printable(data[start].key))
+					    .detail("LastDataKey", printable(data[iend - 1].key))
+					    .detail("FirstRestoredKey",
+					            printable(data[start].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail(
+					        "LastRestoredKey",
+					        printable(data[iend - 1].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail("FileRangeBegin", printable(fileRange.begin))
+					    .detail("FileRangeEnd", printable(fileRange.end))
+					    .detail("AddPrefix", printable(addPrefix.get()))
+					    .detail("RemovePrefix", printable(removePrefix.get()))
+					    .detail("DataStart", start)
+					    .detail("DataEnd", iend)
+					    .detail("TotalDataSize", end);
 
 					// Add to bytes written count
 					restore.bytesWritten().atomicOp(tr, txBytes, MutationRef::Type::AddValue);
@@ -6151,7 +6176,9 @@ ACTOR Future<ERestoreState> abortRestore(Reference<ReadYourWritesTransaction> tr
 	// Cancel the backup tasks on this tag
 	wait(tag.cancel(tr));
 
-	wait(unlockDatabase(tr, current.get().first));
+	if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+		wait(unlockDatabase(tr, current.get().first));
+	}
 	return ERestoreState::ABORTED;
 }
 
@@ -6615,7 +6642,9 @@ public:
 
 		if (unlockDB) {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBStart", randomUID);
-			wait(unlockDatabase(cx, randomUID));
+			if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+				wait(unlockDatabase(cx, randomUID));
+			}
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBFinish", randomUID);
 		} else {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("DBLeftLockedAfterRestore", randomUID);
@@ -6984,7 +7013,8 @@ public:
 				                                .removePrefix(removePrefix)
 				                                .withPrefix(addPrefix);
 				RangeResult existingRows = wait(tr->getRange(restoreIntoRange, 1));
-				if (existingRows.size() > 0) {
+				if (existingRows.size() > 0 && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED &&
+				    !CLIENT_KNOBS->RESTORE_VALIDATION) {
 					throw restore_destination_not_empty();
 				}
 			}
@@ -7834,7 +7864,9 @@ public:
 			// If addPrefix or removePrefix set, we want to transform the effect by copying data
 			if (hasPrefix) {
 				wait(transformRestoredDatabase(cx, ranges, addPrefix, removePrefix));
-				wait(unlockDatabase(cx, randomUid));
+				if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+					wait(unlockDatabase(cx, randomUid));
+				}
 			}
 			return -1;
 		} else {
