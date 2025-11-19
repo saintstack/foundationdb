@@ -127,12 +127,12 @@ struct RestoreValidationWorkload : TestWorkload {
 				if (e.code() == error_code_actor_cancelled) {
 					throw;
 				}
-			// Retry on transient errors from buggify chaos injection
-			if (e.code() == error_code_grv_proxy_memory_limit_exceeded ||
-			    e.code() == error_code_commit_proxy_memory_limit_exceeded ||
-			    e.code() == error_code_database_locked || e.code() == error_code_transaction_too_old ||
-			    e.code() == error_code_future_version || e.code() == error_code_audit_storage_failed ||
-			    e.code() == error_code_tag_throttled) {
+				// Retry on transient errors from buggify chaos injection
+				if (e.code() == error_code_grv_proxy_memory_limit_exceeded ||
+				    e.code() == error_code_commit_proxy_memory_limit_exceeded ||
+				    e.code() == error_code_database_locked || e.code() == error_code_transaction_too_old ||
+				    e.code() == error_code_future_version || e.code() == error_code_audit_storage_failed ||
+				    e.code() == error_code_tag_throttled) {
 					TraceEvent(SevWarn, "RestoreValidationRetryableError")
 					    .error(e)
 					    .detail("CheckAttempts", checkAttempts);

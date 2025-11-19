@@ -579,49 +579,49 @@ ACTOR Future<Void> readCommitted(Database cx,
 			releaser = FlowLock::Releaser(
 			    *lock, limits.bytes + CLIENT_KNOBS->VALUE_SIZE_LIMIT + CLIENT_KNOBS->SYSTEM_KEY_SIZE_LIMIT);
 
-		state RangeResult values = wait(tr.getRange(begin, end, limits));
+			state RangeResult values = wait(tr.getRange(begin, end, limits));
 
-		TraceEvent("BackupReadCommittedBatch")
-		    .detail("BeginKey", printable(begin.getKey()))
-		    .detail("EndKey", printable(end.getKey()))
-		    .detail("ResultSize", values.size())
-		    .detail("ResultBytes", values.expectedSize())
-		    .detail("ResultMore", values.more)
-		    .detail("FirstKey", values.size() > 0 ? printable(values[0].key) : "")
-		    .detail("LastKey", values.size() > 0 ? printable(values.end()[-1].key) : "");
+			TraceEvent("BackupReadCommittedBatch")
+			    .detail("BeginKey", printable(begin.getKey()))
+			    .detail("EndKey", printable(end.getKey()))
+			    .detail("ResultSize", values.size())
+			    .detail("ResultBytes", values.expectedSize())
+			    .detail("ResultMore", values.more)
+			    .detail("FirstKey", values.size() > 0 ? printable(values[0].key) : "")
+			    .detail("LastKey", values.size() > 0 ? printable(values.end()[-1].key) : "");
 
-		// When this buggify line is enabled, if there are more than 1 result then use half of the results
-		// Copy the data instead of messing with the results directly to avoid TSS issues.
-		if (values.size() > 1 && BUGGIFY) {
-			RangeResult copy;
-			// only copy first half of values into copy
-			for (int i = 0; i < values.size() / 2; i++) {
-				copy.push_back_deep(copy.arena(), values[i]);
+			// When this buggify line is enabled, if there are more than 1 result then use half of the results
+			// Copy the data instead of messing with the results directly to avoid TSS issues.
+			if (values.size() > 1 && BUGGIFY) {
+				RangeResult copy;
+				// only copy first half of values into copy
+				for (int i = 0; i < values.size() / 2; i++) {
+					copy.push_back_deep(copy.arena(), values[i]);
+				}
+				TraceEvent("BackupReadCommittedBuggify")
+				    .detail("OriginalSize", values.size())
+				    .detail("TruncatedSize", copy.size())
+				    .detail("OriginalLastKey", printable(values.end()[-1].key))
+				    .detail("TruncatedLastKey", printable(copy.end()[-1].key));
+				values = copy;
+				values.more = true;
+				// Half of the time wait for this tr to expire so that the next read is at a different version
+				if (deterministicRandom()->random01() < 0.5)
+					wait(delay(6.0));
 			}
-			TraceEvent("BackupReadCommittedBuggify")
-			    .detail("OriginalSize", values.size())
-			    .detail("TruncatedSize", copy.size())
-			    .detail("OriginalLastKey", printable(values.end()[-1].key))
-			    .detail("TruncatedLastKey", printable(copy.end()[-1].key));
-			values = copy;
-			values.more = true;
-			// Half of the time wait for this tr to expire so that the next read is at a different version
-			if (deterministicRandom()->random01() < 0.5)
-				wait(delay(6.0));
-		}
 
-		releaser.remaining -=
-		    values.expectedSize(); // its the responsibility of the caller to release after this point
-		ASSERT(releaser.remaining >= 0);
+			releaser.remaining -=
+			    values.expectedSize(); // its the responsibility of the caller to release after this point
+			ASSERT(releaser.remaining >= 0);
 
-		results.send(RangeResultWithVersion(values, tr.getReadVersion().get()));
+			results.send(RangeResultWithVersion(values, tr.getReadVersion().get()));
 
-		if (values.size() > 0)
-			begin = firstGreaterThan(values.end()[-1].key);
-		
-		TraceEvent("BackupReadCommittedNextBegin")
-		    .detail("NextBeginKey", printable(begin.getKey()))
-		    .detail("ValuesMore", values.more);
+			if (values.size() > 0)
+				begin = firstGreaterThan(values.end()[-1].key);
+
+			TraceEvent("BackupReadCommittedNextBegin")
+			    .detail("NextBeginKey", printable(begin.getKey()))
+			    .detail("ValuesMore", values.more);
 
 			if (!values.more && !limits.isReached()) {
 				if (terminator)
@@ -670,36 +670,36 @@ ACTOR Future<Void> readCommitted(Database cx,
 			if (lockAware)
 				tr.setOption(FDBTransactionOptions::LOCK_AWARE);
 
-		state RangeResult rangevalue = wait(tr.getRange(nextKey, end, limits));
+			state RangeResult rangevalue = wait(tr.getRange(nextKey, end, limits));
 
-		TraceEvent("BackupReadCommittedGroupBatch")
-		    .detail("NextKey", printable(nextKey.getKey()))
-		    .detail("EndKey", printable(end.getKey()))
-		    .detail("ResultSize", rangevalue.size())
-		    .detail("ResultBytes", rangevalue.expectedSize())
-		    .detail("ResultMore", rangevalue.more)
-		    .detail("FirstKey", rangevalue.size() > 0 ? printable(rangevalue[0].key) : "")
-		    .detail("LastKey", rangevalue.size() > 0 ? printable(rangevalue.end()[-1].key) : "");
+			TraceEvent("BackupReadCommittedGroupBatch")
+			    .detail("NextKey", printable(nextKey.getKey()))
+			    .detail("EndKey", printable(end.getKey()))
+			    .detail("ResultSize", rangevalue.size())
+			    .detail("ResultBytes", rangevalue.expectedSize())
+			    .detail("ResultMore", rangevalue.more)
+			    .detail("FirstKey", rangevalue.size() > 0 ? printable(rangevalue[0].key) : "")
+			    .detail("LastKey", rangevalue.size() > 0 ? printable(rangevalue.end()[-1].key) : "");
 
-		// When this buggify line is enabled, if there are more than 1 result then use half of the results.
-		// Copy the data instead of messing with the results directly to avoid TSS issues.
-		if (rangevalue.size() > 1 && BUGGIFY) {
-			RangeResult copy;
-			// only copy first half of rangevalue into copy
-			for (int i = 0; i < rangevalue.size() / 2; i++) {
-				copy.push_back_deep(copy.arena(), rangevalue[i]);
+			// When this buggify line is enabled, if there are more than 1 result then use half of the results.
+			// Copy the data instead of messing with the results directly to avoid TSS issues.
+			if (rangevalue.size() > 1 && BUGGIFY) {
+				RangeResult copy;
+				// only copy first half of rangevalue into copy
+				for (int i = 0; i < rangevalue.size() / 2; i++) {
+					copy.push_back_deep(copy.arena(), rangevalue[i]);
+				}
+				TraceEvent("BackupReadCommittedGroupBuggify")
+				    .detail("OriginalSize", rangevalue.size())
+				    .detail("TruncatedSize", copy.size())
+				    .detail("OriginalLastKey", printable(rangevalue.end()[-1].key))
+				    .detail("TruncatedLastKey", printable(copy.end()[-1].key));
+				rangevalue = copy;
+				rangevalue.more = true;
+				// Some of the time wait for this tr to expire so that the next read is at a different version
+				if (deterministicRandom()->random01() < 0.01)
+					wait(delay(6.0));
 			}
-			TraceEvent("BackupReadCommittedGroupBuggify")
-			    .detail("OriginalSize", rangevalue.size())
-			    .detail("TruncatedSize", copy.size())
-			    .detail("OriginalLastKey", printable(rangevalue.end()[-1].key))
-			    .detail("TruncatedLastKey", printable(copy.end()[-1].key));
-			rangevalue = copy;
-			rangevalue.more = true;
-			// Some of the time wait for this tr to expire so that the next read is at a different version
-			if (deterministicRandom()->random01() < 0.01)
-				wait(delay(6.0));
-		}
 
 			// add lock
 			wait(active);
@@ -731,17 +731,17 @@ ACTOR Future<Void> readCommitted(Database cx,
 						//	len += rcGroup.items[j].value.size();
 						//}
 						//TraceEvent("SendGroup").detail("GroupKey", rcGroup.groupKey).detail("Version", rcGroup.version).detail("Length", len).detail("Releaser.remaining", releaser.remaining);
-					releaser.remaining -=
-					    rcGroup.items
-					        .expectedSize(); // its the responsibility of the caller to release after this point
-					ASSERT(releaser.remaining >= 0);
-					results.send(rcGroup);
-					nextKey = firstGreaterThan(rcGroup.items.end()[-1].key);
-					skipGroup = rcGroup.groupKey;
-					TraceEvent("BackupReadCommittedGroupNextKey")
-					    .detail("NextKey", printable(nextKey.getKey()))
-					    .detail("GroupKey", rcGroup.groupKey)
-					    .detail("ItemsSize", rcGroup.items.size());
+						releaser.remaining -=
+						    rcGroup.items
+						        .expectedSize(); // its the responsibility of the caller to release after this point
+						ASSERT(releaser.remaining >= 0);
+						results.send(rcGroup);
+						nextKey = firstGreaterThan(rcGroup.items.end()[-1].key);
+						skipGroup = rcGroup.groupKey;
+						TraceEvent("BackupReadCommittedGroupNextKey")
+						    .detail("NextKey", printable(nextKey.getKey()))
+						    .detail("GroupKey", rcGroup.groupKey)
+						    .detail("ItemsSize", rcGroup.items.size());
 
 						rcGroup = RCGroup();
 						rcGroup.version = tr.getReadVersion().get();

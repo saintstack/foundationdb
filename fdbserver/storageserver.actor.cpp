@@ -4578,7 +4578,7 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 		tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 		tr.setOption(FDBTransactionOptions::LOCK_AWARE);
 		state RangeResult restoredData = wait(tr.getRange(restoredRange, limit, Snapshot::False, Reverse::False));
-		
+
 		// Convert RangeResult to GetKeyValuesReply format
 		GetKeyValuesReply restoredReply;
 		restoredReply.data.append_deep(restoredReply.arena, restoredData.begin(), restoredData.size());
@@ -4588,7 +4588,7 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 	} catch (Error& e) {
 		restoredResult = e;
 	}
-	
+
 	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture = Future<ErrorOr<GetKeyValuesReply>>(restoredResult);
 
 	wait(success(sourceFuture) && success(restoredFuture));
