@@ -3114,8 +3114,8 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		    .detail("TimeElapsed", timeElapsed)
 		    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
 
-		// Track whether we dispatched tasks in THIS iteration
-		state bool dispatchedInThisIteration = (countShardsToDispatch > 0);
+	// Track whether we dispatched tasks in THIS iteration (will be set after actual dispatch)
+	state bool dispatchedInThisIteration = false;
 
 		// Dispatch random shards to catch up to the expected progress
 		while (countShardsToDispatch > 0) {
@@ -3127,28 +3127,26 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			                            : CLIENT_KNOBS->BACKUP_DISPATCH_ADDTASK_SIZE;
 			int added = 0;
 
-			while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
-				// Get a random range.
-				auto it = shardMap.randomRange();
-				// Find a NOT_DONE range and add it to rangesToAdd
-				while (1) {
-					if (it->value() >= NOT_DONE_MIN) {
-						rangesToAdd.push_back(it->range());
-						// Mark as dispatching to prevent re-selection in this loop.
-						// Note: This doesn't mean the task is DONE, just that we're queuing it for dispatch.
-						it->value() = DONE;
-						shardMap.coalesce(Key(it->begin()));
-						++added;
-						++countShardsDone;
-						--countShardsToDispatch;
-						--countShardsNotDone;
-						break;
-					}
-					if (it->end() == shardMap.mapEnd)
-						break;
-					++it;
+		while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
+			// Get a random range.
+			auto it = shardMap.randomRange();
+			// Find a NOT_DONE range and add it to rangesToAdd
+			while (1) {
+				if (it->value() >= NOT_DONE_MIN) {
+					rangesToAdd.push_back(it->range());
+					// Mark as SKIP to prevent re-selection in this loop only.
+					// DON'T update counters here - they're only accurate after reading persistent state!
+					it->value() = SKIP;
+					shardMap.coalesce(Key(it->begin()));
+					++added;
+					--countShardsToDispatch;
+					break;
 				}
+				if (it->end() == shardMap.mapEnd)
+					break;
+				++it;
 			}
+		}
 
 			state int64_t oldBatchSize = snapshotBatchSize.get();
 			state int64_t newBatchSize = oldBatchSize + rangesToAdd.size();
@@ -3249,16 +3247,18 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 						}
 					}
 
-					wait(waitForAll(addTaskFutures));
-					wait(tr->commit());
-					break;
-				} catch (Error& e) {
-					wait(tr->onError(e));
-				}
+				wait(waitForAll(addTaskFutures));
+				wait(tr->commit());
+				// Tasks successfully dispatched!
+				dispatchedInThisIteration = true;
+				break;
+			} catch (Error& e) {
+				wait(tr->onError(e));
 			}
 		}
+	}
 
-		// Only mark snapshot as finished if:
+	// Only mark snapshot as finished if:
 		// 1. All shards are done (countShardsNotDone == 0 means all are in snapshotRangeFileMap)
 		// 2. We did NOT dispatch any tasks in this iteration (they haven't completed yet)
 		// This prevents the bug where snapshot is marked finished immediately after dispatching the last batch.
