@@ -2963,17 +2963,12 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 	// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
 	// until they've actually written their backup files to snapshotRangeFileMap.
 	// 
-	// CRITICAL: snapshotRangeFileMap accumulates entries from ALL snapshots for this backup.
-	// We must filter by VERSION to only count ranges completed for THIS snapshot.
+	// NOTE: snapshotRangeFileMap accumulates entries from ALL snapshots. We mark ALL completed
+	// ranges as DONE (regardless of version) because they don't need backup again. The key insight
+	// is that we compare this with snapshotRangeDispatchMap to find in-flight tasks.
 	if (completedRanges.size() > 0) {
 		for (i = 0; i < completedRanges.size(); ++i) {
 			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
-			
-			// Skip entries from other snapshots! Only count ranges for THIS snapshot.
-			if (entry.second.version < snapshotBeginVersion || entry.second.version > snapshotTargetEndVersion) {
-				continue;
-			}
-			
 			// The range file map stores entries by end key, with the begin key in the value
 			Key endKey = entry.first;
 			Key beginKey = entry.second.begin;
@@ -3031,22 +3026,21 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		shardMap.coalesce(allKeys);
 		wait(yield());
 
-		// In this context "all" refers to all of the shards relevant for this particular backup
-		state int countAllShards = countShardsDone + countShardsNotDone;
+	// In this context "all" refers to all of the shards relevant for this particular backup
+	state int countAllShards = countShardsDone + countShardsNotDone;
 
-		if (countShardsNotDone == 0) {
-			TraceEvent("FileBackupSnapshotDispatchFinished")
-			    .detail("BackupUID", config.getUid())
-			    .detail("AllShards", countAllShards)
-			    .detail("ShardsDone", countShardsDone)
-			    .detail("ShardsNotDone", countShardsNotDone)
-			    .detail("SnapshotBeginVersion", snapshotBeginVersion)
-			    .detail("SnapshotTargetEndVersion", snapshotTargetEndVersion)
-			    .detail("CurrentVersion", recentReadVersion)
-			    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
-			Params.snapshotFinished().set(task, true);
-			return Void();
-		}
+	// CRITICAL: Don't finish the snapshot if all work appears done - we need to dispatch tasks first!
+	// This early check is an optimization but must not cause premature finishing.
+	// The real completion check happens after dispatch (line ~3266) with dispatchedInThisIteration guard.
+	if (countShardsNotDone == 0) {
+		TraceEvent("FileBackupSnapshotDispatchAllShardsDone")
+		    .detail("BackupUID", config.getUid())
+		    .detail("AllShards", countAllShards)
+		    .detail("ShardsDone", countShardsDone)
+		    .detail("ShardsNotDone", countShardsNotDone)
+		    .detail("Note", "Will verify after checking for in-flight tasks");
+		// Continue to dispatch loop to check if there are actually dispatched tasks still running
+	}
 
 		// Decide when the next snapshot dispatch should run.
 		state Version nextDispatchVersion;
