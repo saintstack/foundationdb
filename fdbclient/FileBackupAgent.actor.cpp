@@ -2958,29 +2958,38 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShard;
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShardEnd;
 
-		// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
-		// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
-		// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
-		// until they've actually written their backup files to snapshotRangeFileMap.
-		if (completedRanges.size() > 0) {
-			for (i = 0; i < completedRanges.size(); ++i) {
-				const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
-				// The range file map stores entries by end key, with the begin key in the value
-				Key endKey = entry.first;
-				Key beginKey = entry.second.begin;
+	// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
+	// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
+	// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
+	// until they've actually written their backup files to snapshotRangeFileMap.
+	// 
+	// CRITICAL: snapshotRangeFileMap accumulates entries from ALL snapshots for this backup.
+	// We must filter by VERSION to only count ranges completed for THIS snapshot.
+	if (completedRanges.size() > 0) {
+		for (i = 0; i < completedRanges.size(); ++i) {
+			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
+			
+			// Skip entries from other snapshots! Only count ranges for THIS snapshot.
+			if (entry.second.version < snapshotBeginVersion || entry.second.version > snapshotTargetEndVersion) {
+				continue;
+			}
+			
+			// The range file map stores entries by end key, with the begin key in the value
+			Key endKey = entry.first;
+			Key beginKey = entry.second.begin;
 
-				// Mark all shard ranges in this completed range as DONE
-				RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
-				iShard = shardRanges.begin();
-				iShardEnd = shardRanges.end();
-				for (; iShard != iShardEnd; ++iShard) {
-					iShard->value() = DONE;
-					wait(yield());
-				}
-
+			// Mark all shard ranges in this completed range as DONE
+			RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
+			iShard = shardRanges.begin();
+			iShardEnd = shardRanges.end();
+			for (; iShard != iShardEnd; ++iShard) {
+				iShard->value() = DONE;
 				wait(yield());
 			}
+
+			wait(yield());
 		}
+	}
 
 		// DON'T mark dispatched ranges in the shardMap at all!
 		// Dispatched-but-incomplete ranges should remain as their original shard values (NOT_DONE_MIN+)
