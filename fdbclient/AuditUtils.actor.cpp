@@ -489,11 +489,13 @@ ACTOR Future<Void> persistAuditStateByRange(Database cx, AuditStorageState audit
 			if (!ddAuditState_.present()) {
 				throw audit_storage_cancelled();
 			}
-			AuditStorageState ddAuditState = decodeAuditStorageState(ddAuditState_.get());
-			ASSERT(ddAuditState.ddId.isValid());
-			if (ddAuditState.ddId != auditState.ddId) {
-				throw audit_storage_task_outdated(); // a new dd starts and this audit task is outdated
-			}
+		AuditStorageState ddAuditState = decodeAuditStorageState(ddAuditState_.get());
+		ASSERT(ddAuditState.ddId.isValid());
+		if (ddAuditState.ddId != auditState.ddId) {
+			// DD failover occurred - update to new DD ID and continue
+			// The validation work completed successfully, just persist it with the current DD ID
+			auditState.ddId = ddAuditState.ddId;
+		}
 			// It is possible ddAuditState is complete while some progress is about to persist
 			// Since doAuditOnStorageServer may repeatedly issue multiple requests (see getReplyUnlessFailedFor)
 			// For this case, no need to proceed. Silently exit
@@ -580,11 +582,13 @@ ACTOR Future<Void> persistAuditStateByServer(Database cx, AuditStorageState audi
 			if (!ddAuditState_.present()) {
 				throw audit_storage_cancelled();
 			}
-			AuditStorageState ddAuditState = decodeAuditStorageState(ddAuditState_.get());
-			ASSERT(ddAuditState.ddId.isValid());
-			if (ddAuditState.ddId != auditState.ddId) {
-				throw audit_storage_task_outdated(); // a new dd starts and this audit task is outdated
-			}
+		AuditStorageState ddAuditState = decodeAuditStorageState(ddAuditState_.get());
+		ASSERT(ddAuditState.ddId.isValid());
+		if (ddAuditState.ddId != auditState.ddId) {
+			// DD failover occurred - update to new DD ID and continue
+			// The validation work completed successfully, just persist it with the current DD ID
+			auditState.ddId = ddAuditState.ddId;
+		}
 			// It is possible ddAuditState is complete while some progress is about to persist
 			// Since doAuditOnStorageServer may repeatedly issue multiple requests (see getReplyUnlessFailedFor)
 			// For this case, no need to proceed. Silently exit
