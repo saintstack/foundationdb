@@ -24,6 +24,7 @@ testTitle = 'RestoreValidationSimple'
 clearAfterTest = false
 simBackupAgents = 'BackupToFile'
 waitForQuiescenceBegin = false
+runFailureWorkloads = false
 
     [[test.workload]]
     testName = 'Cycle'
