@@ -2967,23 +2967,29 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// ranges as DONE (regardless of version) because they don't need backup again. The key insight
 		// is that we compare this with snapshotRangeDispatchMap to find in-flight tasks.
 		if (completedRanges.size() > 0) {
-			for (i = 0; i < completedRanges.size(); ++i) {
-				const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
-				// The range file map stores entries by end key, with the begin key in the value
-				Key endKey = entry.first;
-				Key beginKey = entry.second.begin;
+		for (i = 0; i < completedRanges.size(); ++i) {
+			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
+			
+			// Skip entries from other snapshots! Only count ranges for THIS snapshot.
+			if (entry.second.version < snapshotBeginVersion || entry.second.version > snapshotTargetEndVersion) {
+				continue;
+			}
+			
+			// The range file map stores entries by end key, with the begin key in the value
+			Key endKey = entry.first;
+			Key beginKey = entry.second.begin;
 
-				// Mark all shard ranges in this completed range as DONE
-				RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
-				iShard = shardRanges.begin();
-				iShardEnd = shardRanges.end();
-				for (; iShard != iShardEnd; ++iShard) {
-					iShard->value() = DONE;
-					wait(yield());
-				}
-
+			// Mark all shard ranges in this completed range as DONE
+			RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
+			iShard = shardRanges.begin();
+			iShardEnd = shardRanges.end();
+			for (; iShard != iShardEnd; ++iShard) {
+				iShard->value() = DONE;
 				wait(yield());
 			}
+
+			wait(yield());
+		}
 		}
 
 		// DON'T mark dispatched ranges in the shardMap at all!
