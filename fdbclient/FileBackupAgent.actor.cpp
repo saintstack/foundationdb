@@ -2958,33 +2958,33 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShard;
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShardEnd;
 
-	// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
-	// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
-	// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
-	// until they've actually written their backup files to snapshotRangeFileMap.
-	// 
-	// NOTE: snapshotRangeFileMap accumulates entries from ALL snapshots. We mark ALL completed
-	// ranges as DONE (regardless of version) because they don't need backup again. The key insight
-	// is that we compare this with snapshotRangeDispatchMap to find in-flight tasks.
-	if (completedRanges.size() > 0) {
-		for (i = 0; i < completedRanges.size(); ++i) {
-			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
-			// The range file map stores entries by end key, with the begin key in the value
-			Key endKey = entry.first;
-			Key beginKey = entry.second.begin;
+		// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
+		// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
+		// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
+		// until they've actually written their backup files to snapshotRangeFileMap.
+		//
+		// NOTE: snapshotRangeFileMap accumulates entries from ALL snapshots. We mark ALL completed
+		// ranges as DONE (regardless of version) because they don't need backup again. The key insight
+		// is that we compare this with snapshotRangeDispatchMap to find in-flight tasks.
+		if (completedRanges.size() > 0) {
+			for (i = 0; i < completedRanges.size(); ++i) {
+				const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
+				// The range file map stores entries by end key, with the begin key in the value
+				Key endKey = entry.first;
+				Key beginKey = entry.second.begin;
 
-			// Mark all shard ranges in this completed range as DONE
-			RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
-			iShard = shardRanges.begin();
-			iShardEnd = shardRanges.end();
-			for (; iShard != iShardEnd; ++iShard) {
-				iShard->value() = DONE;
+				// Mark all shard ranges in this completed range as DONE
+				RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
+				iShard = shardRanges.begin();
+				iShardEnd = shardRanges.end();
+				for (; iShard != iShardEnd; ++iShard) {
+					iShard->value() = DONE;
+					wait(yield());
+				}
+
 				wait(yield());
 			}
-
-			wait(yield());
 		}
-	}
 
 		// DON'T mark dispatched ranges in the shardMap at all!
 		// Dispatched-but-incomplete ranges should remain as their original shard values (NOT_DONE_MIN+)
@@ -3026,21 +3026,21 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		shardMap.coalesce(allKeys);
 		wait(yield());
 
-	// In this context "all" refers to all of the shards relevant for this particular backup
-	state int countAllShards = countShardsDone + countShardsNotDone;
+		// In this context "all" refers to all of the shards relevant for this particular backup
+		state int countAllShards = countShardsDone + countShardsNotDone;
 
-	// CRITICAL: Don't finish the snapshot if all work appears done - we need to dispatch tasks first!
-	// This early check is an optimization but must not cause premature finishing.
-	// The real completion check happens after dispatch (line ~3266) with dispatchedInThisIteration guard.
-	if (countShardsNotDone == 0) {
-		TraceEvent("FileBackupSnapshotDispatchAllShardsDone")
-		    .detail("BackupUID", config.getUid())
-		    .detail("AllShards", countAllShards)
-		    .detail("ShardsDone", countShardsDone)
-		    .detail("ShardsNotDone", countShardsNotDone)
-		    .detail("Note", "Will verify after checking for in-flight tasks");
-		// Continue to dispatch loop to check if there are actually dispatched tasks still running
-	}
+		// CRITICAL: Don't finish the snapshot if all work appears done - we need to dispatch tasks first!
+		// This early check is an optimization but must not cause premature finishing.
+		// The real completion check happens after dispatch (line ~3266) with dispatchedInThisIteration guard.
+		if (countShardsNotDone == 0) {
+			TraceEvent("FileBackupSnapshotDispatchAllShardsDone")
+			    .detail("BackupUID", config.getUid())
+			    .detail("AllShards", countAllShards)
+			    .detail("ShardsDone", countShardsDone)
+			    .detail("ShardsNotDone", countShardsNotDone)
+			    .detail("Note", "Will verify after checking for in-flight tasks");
+			// Continue to dispatch loop to check if there are actually dispatched tasks still running
+		}
 
 		// Decide when the next snapshot dispatch should run.
 		state Version nextDispatchVersion;
@@ -3114,37 +3114,37 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		    .detail("TimeElapsed", timeElapsed)
 		    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
 
-	// Track whether we dispatched tasks in THIS iteration (will be set after actual dispatch)
-	state bool dispatchedInThisIteration = false;
+		// Track whether we dispatched tasks in THIS iteration (will be set after actual dispatch)
+		state bool dispatchedInThisIteration = false;
 
-	// Dispatch random shards to catch up to the expected progress
-	while (countShardsToDispatch > 0) {
-		// First select ranges to add
-		state std::vector<KeyRange> rangesToAdd;
-		state std::set<Key> selectedBeginKeys; // Track selected ranges to prevent re-selection
+		// Dispatch random shards to catch up to the expected progress
+		while (countShardsToDispatch > 0) {
+			// First select ranges to add
+			state std::vector<KeyRange> rangesToAdd;
+			state std::set<Key> selectedBeginKeys; // Track selected ranges to prevent re-selection
 
-		// Limit number of tasks added per transaction
-		int taskBatchSize = BUGGIFY ? deterministicRandom()->randomInt(1, countShardsToDispatch + 1)
-		                            : CLIENT_KNOBS->BACKUP_DISPATCH_ADDTASK_SIZE;
-		int added = 0;
+			// Limit number of tasks added per transaction
+			int taskBatchSize = BUGGIFY ? deterministicRandom()->randomInt(1, countShardsToDispatch + 1)
+			                            : CLIENT_KNOBS->BACKUP_DISPATCH_ADDTASK_SIZE;
+			int added = 0;
 
-		while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
-			// Get a random range.
-			auto it = shardMap.randomRange();
-			// Find a NOT_DONE range that hasn't been selected yet
-			while (1) {
-				if (it->value() >= NOT_DONE_MIN && selectedBeginKeys.count(it->begin()) == 0) {
-					rangesToAdd.push_back(it->range());
-					selectedBeginKeys.insert(it->begin());
-					++added;
-					--countShardsToDispatch;
-					break;
+			while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
+				// Get a random range.
+				auto it = shardMap.randomRange();
+				// Find a NOT_DONE range that hasn't been selected yet
+				while (1) {
+					if (it->value() >= NOT_DONE_MIN && selectedBeginKeys.count(it->begin()) == 0) {
+						rangesToAdd.push_back(it->range());
+						selectedBeginKeys.insert(it->begin());
+						++added;
+						--countShardsToDispatch;
+						break;
+					}
+					if (it->end() == shardMap.mapEnd)
+						break;
+					++it;
 				}
-				if (it->end() == shardMap.mapEnd)
-					break;
-				++it;
 			}
-		}
 
 			state int64_t oldBatchSize = snapshotBatchSize.get();
 			state int64_t newBatchSize = oldBatchSize + rangesToAdd.size();
@@ -3190,16 +3190,33 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 					for (i = 0; i < beginReads.size(); ++i) {
 						KeyRange& range = rangesToAdd[i];
 
-						// This loop might have made changes to begin or end boundaries in a prior
-						// iteration.  If so, the updated values exist in the RYW cache so re-read both entries.
-						Optional<bool> beginValue = config.snapshotRangeDispatchMap().get(tr, range.begin).get();
-						Optional<bool> endValue = config.snapshotRangeDispatchMap().get(tr, range.end).get();
+						// Skip zero-length ranges - they can cause assertion failures when begin==end
+						if (range.begin == range.end) {
+							TraceEvent(SevWarn, "FileBackupSnapshotDispatchSkippingZeroLengthRange")
+							    .detail("BackupUID", config.getUid())
+							    .detail("Key", range.begin.printable());
+							continue;
+						}
 
-						ASSERT(!beginValue.present() || !endValue.present() || beginValue != endValue);
+					// This loop might have made changes to begin or end boundaries in a prior
+					// iteration.  If so, the updated values exist in the RYW cache so re-read both entries.
+					Optional<bool> beginValue = config.snapshotRangeDispatchMap().get(tr, range.begin).get();
+					Optional<bool> endValue = config.snapshotRangeDispatchMap().get(tr, range.end).get();
 
-						// If begin is present, it must be a range end so value must be false
-						// If end is present, it must be a range begin so value must be true
-						if ((!beginValue.present() || !beginValue.get()) && (!endValue.present() || endValue.get())) {
+					// Check if this range is already dispatched or has been merged by prior iterations
+					// in this batch. If both boundaries exist with the same value, it means earlier
+					// iterations merged ranges and this range is now part of a larger dispatched range.
+					if (beginValue.present() && endValue.present() && beginValue == endValue) {
+						TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+						    .detail("BackupUID", config.getUid())
+						    .detail("BeginKey", range.begin.printable())
+						    .detail("EndKey", range.end.printable());
+						continue; // Skip this range, it's already covered
+					}
+
+					// If begin is present, it must be a range end so value must be false
+					// If end is present, it must be a range begin so value must be true
+					if ((!beginValue.present() || !beginValue.get()) && (!endValue.present() || endValue.get())) {
 							if (beginValue.present()) {
 								config.snapshotRangeDispatchMap().erase(tr, range.begin);
 							} else {
@@ -3231,36 +3248,36 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 							                                         Reference<TaskFuture>(),
 							                                         scheduledVersion)));
 
-						TraceEvent("FileBackupSnapshotRangeDispatched")
-						    .suppressFor(2)
-						    .detail("BackupUID", config.getUid())
-						    .detail("CurrentVersion", recentReadVersion)
-						    .detail("ScheduledVersion", scheduledVersion)
-						    .detail("BeginKey", range.begin.printable())
-						    .detail("EndKey", range.end.printable());
-					} else {
-						// Range is already dispatched (concurrent dispatcher or previous iteration).
-						// This is OK - just skip this range and continue.
-						TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
-						    .suppressFor(2)
-						    .detail("BackupUID", config.getUid())
-						    .detail("BeginKey", range.begin.printable())
-						    .detail("EndKey", range.end.printable());
-					}
+							TraceEvent("FileBackupSnapshotRangeDispatched")
+							    .suppressFor(2)
+							    .detail("BackupUID", config.getUid())
+							    .detail("CurrentVersion", recentReadVersion)
+							    .detail("ScheduledVersion", scheduledVersion)
+							    .detail("BeginKey", range.begin.printable())
+							    .detail("EndKey", range.end.printable());
+						} else {
+							// Range is already dispatched (concurrent dispatcher or previous iteration).
+							// This is OK - just skip this range and continue.
+							TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+							    .suppressFor(2)
+							    .detail("BackupUID", config.getUid())
+							    .detail("BeginKey", range.begin.printable())
+							    .detail("EndKey", range.end.printable());
+						}
 					}
 
-				wait(waitForAll(addTaskFutures));
-				wait(tr->commit());
-				// Tasks successfully dispatched!
-				dispatchedInThisIteration = true;
-				break;
-			} catch (Error& e) {
-				wait(tr->onError(e));
+					wait(waitForAll(addTaskFutures));
+					wait(tr->commit());
+					// Tasks successfully dispatched!
+					dispatchedInThisIteration = true;
+					break;
+				} catch (Error& e) {
+					wait(tr->onError(e));
+				}
 			}
 		}
-	}
 
-	// Only mark snapshot as finished if:
+		// Only mark snapshot as finished if:
 		// 1. All shards are done (countShardsNotDone == 0 means all are in snapshotRangeFileMap)
 		// 2. We did NOT dispatch any tasks in this iteration (they haven't completed yet)
 		// This prevents the bug where snapshot is marked finished immediately after dispatching the last batch.
