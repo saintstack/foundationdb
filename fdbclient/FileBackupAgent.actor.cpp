@@ -3117,27 +3117,25 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 	// Track whether we dispatched tasks in THIS iteration (will be set after actual dispatch)
 	state bool dispatchedInThisIteration = false;
 
-		// Dispatch random shards to catch up to the expected progress
-		while (countShardsToDispatch > 0) {
-			// First select ranges to add
-			state std::vector<KeyRange> rangesToAdd;
+	// Dispatch random shards to catch up to the expected progress
+	while (countShardsToDispatch > 0) {
+		// First select ranges to add
+		state std::vector<KeyRange> rangesToAdd;
+		state std::set<Key> selectedBeginKeys; // Track selected ranges to prevent re-selection
 
-			// Limit number of tasks added per transaction
-			int taskBatchSize = BUGGIFY ? deterministicRandom()->randomInt(1, countShardsToDispatch + 1)
-			                            : CLIENT_KNOBS->BACKUP_DISPATCH_ADDTASK_SIZE;
-			int added = 0;
+		// Limit number of tasks added per transaction
+		int taskBatchSize = BUGGIFY ? deterministicRandom()->randomInt(1, countShardsToDispatch + 1)
+		                            : CLIENT_KNOBS->BACKUP_DISPATCH_ADDTASK_SIZE;
+		int added = 0;
 
 		while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
 			// Get a random range.
 			auto it = shardMap.randomRange();
-			// Find a NOT_DONE range and add it to rangesToAdd
+			// Find a NOT_DONE range that hasn't been selected yet
 			while (1) {
-				if (it->value() >= NOT_DONE_MIN) {
+				if (it->value() >= NOT_DONE_MIN && selectedBeginKeys.count(it->begin()) == 0) {
 					rangesToAdd.push_back(it->range());
-					// Mark as SKIP to prevent re-selection in this loop only.
-					// DON'T update counters here - they're only accurate after reading persistent state!
-					it->value() = SKIP;
-					shardMap.coalesce(Key(it->begin()));
+					selectedBeginKeys.insert(it->begin());
 					++added;
 					--countShardsToDispatch;
 					break;
