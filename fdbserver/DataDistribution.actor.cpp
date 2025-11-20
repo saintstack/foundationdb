@@ -3574,13 +3574,16 @@ ACTOR Future<Void> auditStorageCore(Reference<DataDistributor> self,
 		    .detail("AuditID", auditID)
 		    .detail("AuditStorageCoreGeneration", currentRetryCount)
 		    .detail("RetryCount", audit->retryCount)
-		    .detail("AuditType", auditType)
-		    .detail("Range", audit->coreState.range);
+	    .detail("AuditType", auditType)
+	    .detail("Range", audit->coreState.range);
 		if (e.code() == error_code_movekeys_conflict) {
 			removeAuditFromAuditMap(self, audit->coreState.getType(),
 			                        audit->coreState.id); // remove audit
 			// Silently exit
 		} else if (e.code() == error_code_audit_storage_task_outdated) {
+			// DD failover occurred - storage server completed audit with old DD ID
+			// Remove from map so it can be properly resumed/retried
+			removeAuditFromAuditMap(self, audit->coreState.getType(), audit->coreState.id);
 			// Silently exit
 		} else if (e.code() == error_code_audit_storage_cancelled) {
 			// If this audit is cancelled, the place where cancelling
