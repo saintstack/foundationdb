@@ -2988,17 +2988,12 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 				wait(yield());
 			}
 
-			wait(yield());
+		wait(yield());
 		}
-		}
+	}
 
-		// DON'T mark dispatched ranges in the shardMap at all!
-		// Dispatched-but-incomplete ranges should remain as their original shard values (NOT_DONE_MIN+)
-		// so they count toward countShardsNotDone. They won't be re-dispatched because the dispatch
-		// code checks snapshotRangeDispatchMap before creating tasks (see lines 3193-3241 below).
-
-		// Set anything outside the backup ranges to SKIP.  We can use insert() here instead of modify()
-		// because it's OK to delete shard boundaries in the skipped ranges.
+	// Set anything outside the backup ranges to SKIP.  We can use insert() here instead of modify()
+	// because it's OK to delete shard boundaries in the skipped ranges.
 		if (backupRanges.size() > 0) {
 			shardMap.insert(KeyRangeRef(allKeys.begin, backupRanges.front().begin), SKIP);
 			wait(yield());
@@ -3209,16 +3204,35 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 					Optional<bool> beginValue = config.snapshotRangeDispatchMap().get(tr, range.begin).get();
 					Optional<bool> endValue = config.snapshotRangeDispatchMap().get(tr, range.end).get();
 
-					// Check if this range is already dispatched or has been merged by prior iterations
-					// in this batch. If both boundaries exist with the same value, it means earlier
-					// iterations merged ranges and this range is now part of a larger dispatched range.
-					if (beginValue.present() && endValue.present() && beginValue == endValue) {
-						TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
-						    .detail("BackupUID", config.getUid())
-						    .detail("BeginKey", range.begin.printable())
-						    .detail("EndKey", range.end.printable());
-						continue; // Skip this range, it's already covered
+				// Check if this range is already dispatched or has been merged by prior iterations
+				// in this batch. If both boundaries exist with the same value, it means earlier
+				// iterations merged ranges and this range is now part of a larger dispatched range.
+				// Also check if the range is properly bounded (begin=true, end=false) but was
+				// selected from a previous iteration and is already in the dispatch map.
+				bool alreadyDispatched = false;
+				if (beginValue.present() && endValue.present()) {
+					// If both have same value, it's merged/already dispatched
+					if (beginValue == endValue) {
+						alreadyDispatched = true;
 					}
+					// If properly bounded (begin=true, end=false) but both present, it means
+					// this range was dispatched in a prior iteration but not yet completed
+					else if (beginValue.get() == true && endValue.get() == false) {
+						alreadyDispatched = true;
+					}
+				}
+				
+				if (alreadyDispatched) {
+					TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+					    .detail("BackupUID", config.getUid())
+					    .detail("BeginKey", range.begin.printable())
+					    .detail("EndKey", range.end.printable())
+					    .detail("BeginValue", beginValue.present() ? (beginValue.get() ? "true" : "false") : "absent")
+					    .detail("EndValue", endValue.present() ? (endValue.get() ? "true" : "false") : "absent");
+					// Don't dispatch this range, but count it as handled to avoid infinite loop
+					--countShardsToDispatch;
+					continue;
+				}
 
 					// If begin is present, it must be a range end so value must be false
 					// If end is present, it must be a range begin so value must be true
