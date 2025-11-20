@@ -2970,9 +2970,11 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		for (i = 0; i < completedRanges.size(); ++i) {
 			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
 			
-			// Skip entries from other snapshots! Only count ranges for THIS snapshot.
-			if (entry.second.version < snapshotBeginVersion || entry.second.version > snapshotTargetEndVersion) {
-				continue;
+			// Skip entries from PREVIOUS snapshots. Only count ranges for this snapshot or later.
+			// Note: Tasks for this snapshot read at versions >= snapshotTargetEndVersion (possibly
+			// slightly after), so we can't filter by upper bound. We only filter out old snapshots.
+			if (entry.second.version < snapshotBeginVersion) {
+				continue; // From a previous snapshot, skip it
 			}
 			
 			// The range file map stores entries by end key, with the begin key in the value
