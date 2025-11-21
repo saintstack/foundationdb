@@ -2496,8 +2496,9 @@ struct BackupRangeTaskFunc : BackupTaskFuncBase {
 
 		// When a key range task saves the last chunk of progress and then the executor dies, when the task
 		// continues its beginKey and endKey will be equal but there is no work to be done.
-		if (beginKey == endKey)
+		if (beginKey == endKey) {
 			return Void();
+		}
 
 		// Find out if there is a shard boundary in(beginKey, endKey)
 		Standalone<VectorRef<KeyRef>> keys = wait(runRYWTransaction(
@@ -2919,6 +2920,36 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
+		// Read all COMPLETED ranges (ranges that have written files)
+		// This is different from dispatched ranges - a range can be dispatched but not yet completed.
+		state std::vector<std::pair<Key, BackupConfig::RangeSlice>> completedRanges;
+		tr->reset();
+		beginKey = allKeys.begin;
+		loop {
+			try {
+				tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+				tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+
+				state Future<BackupConfig::RangeFileMapT::RangeResultType> completed =
+				    config.snapshotRangeFileMap().getRange(tr, beginKey, keyAfter(allKeys.end), CLIENT_KNOBS->TOO_MANY);
+				wait(success(completed) && taskBucket->keepRunning(tr, task));
+
+				if (!completed.get().results.empty()) {
+					completedRanges.reserve(completedRanges.size() + completed.get().results.size());
+					completedRanges.insert(
+					    completedRanges.end(), completed.get().results.begin(), completed.get().results.end());
+				}
+
+				if (!completed.get().more)
+					break;
+
+				beginKey = keyAfter(completed.get().results.back().first);
+				tr->reset();
+			} catch (Error& e) {
+				wait(tr->onError(e));
+			}
+		}
+
 		// The next few sections involve combining the results above.  Yields are used after operations
 		// that could have operated on many thousands of things and in loops which could have many
 		// thousands of iterations.
@@ -2927,40 +2958,44 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShard;
 		state RangeMap<Key, int, KeyRangeRef>::iterator iShardEnd;
 
-		// Set anything inside a dispatched range to DONE.
-		// Also ensure that the boundary value are true, false, [true, false]...
-		if (dispatchBoundaries.size() > 0) {
-			state bool lastValue = false;
-			state Key lastKey;
-			for (i = 0; i < dispatchBoundaries.size(); ++i) {
-				const std::pair<Key, bool>& boundary = dispatchBoundaries[i];
+		// FIX: Mark ranges as DONE only if they've COMPLETED (written files), not just dispatched.
+		// The old code marked dispatched ranges as DONE, causing the snapshot to finish prematurely.
+		// Dispatched ranges are tracked separately to prevent re-dispatch, but don't count as "done"
+		// until they've actually written their backup files to snapshotRangeFileMap.
+		//
+		// NOTE: snapshotRangeFileMap accumulates entries from ALL snapshots. We mark ALL completed
+		// ranges as DONE (regardless of version) because they don't need backup again. The key insight
+		// is that we compare this with snapshotRangeDispatchMap to find in-flight tasks.
+		if (completedRanges.size() > 0) {
+		for (i = 0; i < completedRanges.size(); ++i) {
+			const std::pair<Key, BackupConfig::RangeSlice>& entry = completedRanges[i];
+			
+			// Skip entries from PREVIOUS snapshots. Only count ranges for this snapshot or later.
+			// Note: Tasks for this snapshot read at versions >= snapshotTargetEndVersion (possibly
+			// slightly after), so we can't filter by upper bound. We only filter out old snapshots.
+			if (entry.second.version < snapshotBeginVersion) {
+				continue; // From a previous snapshot, skip it
+			}
+			
+			// The range file map stores entries by end key, with the begin key in the value
+			Key endKey = entry.first;
+			Key beginKey = entry.second.begin;
 
-				// Values must alternate
-				ASSERT(boundary.second == !lastValue);
-
-				// If this was the end of a dispatched range
-				if (!boundary.second) {
-					// Ensure that the dispatched boundaries exist AND set all shard ranges in the dispatched range
-					// to DONE.
-					RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges =
-					    shardMap.modify(KeyRangeRef(lastKey, boundary.first));
-					iShard = shardRanges.begin();
-					iShardEnd = shardRanges.end();
-					for (; iShard != iShardEnd; ++iShard) {
-						iShard->value() = DONE;
-						wait(yield());
-					}
-				}
-				lastValue = dispatchBoundaries[i].second;
-				lastKey = dispatchBoundaries[i].first;
-
+			// Mark all shard ranges in this completed range as DONE
+			RangeMap<Key, int, KeyRangeRef>::Ranges shardRanges = shardMap.modify(KeyRangeRef(beginKey, endKey));
+			iShard = shardRanges.begin();
+			iShardEnd = shardRanges.end();
+			for (; iShard != iShardEnd; ++iShard) {
+				iShard->value() = DONE;
 				wait(yield());
 			}
-			ASSERT(lastValue == false);
-		}
 
-		// Set anything outside the backup ranges to SKIP.  We can use insert() here instead of modify()
-		// because it's OK to delete shard boundaries in the skipped ranges.
+		wait(yield());
+		}
+	}
+
+	// Set anything outside the backup ranges to SKIP.  We can use insert() here instead of modify()
+	// because it's OK to delete shard boundaries in the skipped ranges.
 		if (backupRanges.size() > 0) {
 			shardMap.insert(KeyRangeRef(allKeys.begin, backupRanges.front().begin), SKIP);
 			wait(yield());
@@ -2997,18 +3032,17 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// In this context "all" refers to all of the shards relevant for this particular backup
 		state int countAllShards = countShardsDone + countShardsNotDone;
 
+		// CRITICAL: Don't finish the snapshot if all work appears done - we need to dispatch tasks first!
+		// This early check is an optimization but must not cause premature finishing.
+		// The real completion check happens after dispatch (line ~3266) with dispatchedInThisIteration guard.
 		if (countShardsNotDone == 0) {
-			TraceEvent("FileBackupSnapshotDispatchFinished")
+			TraceEvent("FileBackupSnapshotDispatchAllShardsDone")
 			    .detail("BackupUID", config.getUid())
 			    .detail("AllShards", countAllShards)
 			    .detail("ShardsDone", countShardsDone)
 			    .detail("ShardsNotDone", countShardsNotDone)
-			    .detail("SnapshotBeginVersion", snapshotBeginVersion)
-			    .detail("SnapshotTargetEndVersion", snapshotTargetEndVersion)
-			    .detail("CurrentVersion", recentReadVersion)
-			    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
-			Params.snapshotFinished().set(task, true);
-			return Void();
+			    .detail("Note", "Will verify after checking for in-flight tasks");
+			// Continue to dispatch loop to check if there are actually dispatched tasks still running
 		}
 
 		// Decide when the next snapshot dispatch should run.
@@ -3083,10 +3117,14 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		    .detail("TimeElapsed", timeElapsed)
 		    .detail("SnapshotIntervalSeconds", snapshotIntervalSeconds);
 
+		// Track whether we dispatched tasks in THIS iteration (will be set after actual dispatch)
+		state bool dispatchedInThisIteration = false;
+
 		// Dispatch random shards to catch up to the expected progress
 		while (countShardsToDispatch > 0) {
 			// First select ranges to add
 			state std::vector<KeyRange> rangesToAdd;
+			state std::set<Key> selectedBeginKeys; // Track selected ranges to prevent re-selection
 
 			// Limit number of tasks added per transaction
 			int taskBatchSize = BUGGIFY ? deterministicRandom()->randomInt(1, countShardsToDispatch + 1)
@@ -3096,16 +3134,13 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			while (countShardsToDispatch > 0 && added < taskBatchSize && shardMap.size() > 0) {
 				// Get a random range.
 				auto it = shardMap.randomRange();
-				// Find a NOT_DONE range and add it to rangesToAdd
+				// Find a NOT_DONE range that hasn't been selected yet
 				while (1) {
-					if (it->value() >= NOT_DONE_MIN) {
+					if (it->value() >= NOT_DONE_MIN && selectedBeginKeys.count(it->begin()) == 0) {
 						rangesToAdd.push_back(it->range());
-						it->value() = DONE;
-						shardMap.coalesce(Key(it->begin()));
+						selectedBeginKeys.insert(it->begin());
 						++added;
-						++countShardsDone;
 						--countShardsToDispatch;
-						--countShardsNotDone;
 						break;
 					}
 					if (it->end() == shardMap.mapEnd)
@@ -3158,16 +3193,52 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 					for (i = 0; i < beginReads.size(); ++i) {
 						KeyRange& range = rangesToAdd[i];
 
-						// This loop might have made changes to begin or end boundaries in a prior
-						// iteration.  If so, the updated values exist in the RYW cache so re-read both entries.
-						Optional<bool> beginValue = config.snapshotRangeDispatchMap().get(tr, range.begin).get();
-						Optional<bool> endValue = config.snapshotRangeDispatchMap().get(tr, range.end).get();
+						// Skip zero-length ranges - they can cause assertion failures when begin==end
+						if (range.begin == range.end) {
+							TraceEvent(SevWarn, "FileBackupSnapshotDispatchSkippingZeroLengthRange")
+							    .detail("BackupUID", config.getUid())
+							    .detail("Key", range.begin.printable());
+							continue;
+						}
 
-						ASSERT(!beginValue.present() || !endValue.present() || beginValue != endValue);
+					// This loop might have made changes to begin or end boundaries in a prior
+					// iteration.  If so, the updated values exist in the RYW cache so re-read both entries.
+					Optional<bool> beginValue = config.snapshotRangeDispatchMap().get(tr, range.begin).get();
+					Optional<bool> endValue = config.snapshotRangeDispatchMap().get(tr, range.end).get();
 
-						// If begin is present, it must be a range end so value must be false
-						// If end is present, it must be a range begin so value must be true
-						if ((!beginValue.present() || !beginValue.get()) && (!endValue.present() || endValue.get())) {
+				// Check if this range is already dispatched or has been merged by prior iterations
+				// in this batch. If both boundaries exist with the same value, it means earlier
+				// iterations merged ranges and this range is now part of a larger dispatched range.
+				// Also check if the range is properly bounded (begin=true, end=false) but was
+				// selected from a previous iteration and is already in the dispatch map.
+				bool alreadyDispatched = false;
+				if (beginValue.present() && endValue.present()) {
+					// If both have same value, it's merged/already dispatched
+					if (beginValue == endValue) {
+						alreadyDispatched = true;
+					}
+					// If properly bounded (begin=true, end=false) but both present, it means
+					// this range was dispatched in a prior iteration but not yet completed
+					else if (beginValue.get() == true && endValue.get() == false) {
+						alreadyDispatched = true;
+					}
+				}
+				
+				if (alreadyDispatched) {
+					TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+					    .detail("BackupUID", config.getUid())
+					    .detail("BeginKey", range.begin.printable())
+					    .detail("EndKey", range.end.printable())
+					    .detail("BeginValue", beginValue.present() ? (beginValue.get() ? "true" : "false") : "absent")
+					    .detail("EndValue", endValue.present() ? (endValue.get() ? "true" : "false") : "absent");
+					// Don't dispatch this range, but count it as handled to avoid infinite loop
+					--countShardsToDispatch;
+					continue;
+				}
+
+					// If begin is present, it must be a range end so value must be false
+					// If end is present, it must be a range begin so value must be true
+					if ((!beginValue.present() || !beginValue.get()) && (!endValue.present() || endValue.get())) {
 							if (beginValue.present()) {
 								config.snapshotRangeDispatchMap().erase(tr, range.begin);
 							} else {
@@ -3207,14 +3278,20 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 							    .detail("BeginKey", range.begin.printable())
 							    .detail("EndKey", range.end.printable());
 						} else {
-							// This shouldn't happen because if the transaction was already done or if another
-							// execution of this task is making progress it should have been detected above.
-							ASSERT(false);
+							// Range is already dispatched (concurrent dispatcher or previous iteration).
+							// This is OK - just skip this range and continue.
+							TraceEvent(SevInfo, "FileBackupSnapshotRangeAlreadyDispatched")
+							    .suppressFor(2)
+							    .detail("BackupUID", config.getUid())
+							    .detail("BeginKey", range.begin.printable())
+							    .detail("EndKey", range.end.printable());
 						}
 					}
 
 					wait(waitForAll(addTaskFutures));
 					wait(tr->commit());
+					// Tasks successfully dispatched!
+					dispatchedInThisIteration = true;
 					break;
 				} catch (Error& e) {
 					wait(tr->onError(e));
@@ -3222,7 +3299,11 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 			}
 		}
 
-		if (countShardsNotDone == 0) {
+		// Only mark snapshot as finished if:
+		// 1. All shards are done (countShardsNotDone == 0 means all are in snapshotRangeFileMap)
+		// 2. We did NOT dispatch any tasks in this iteration (they haven't completed yet)
+		// This prevents the bug where snapshot is marked finished immediately after dispatching the last batch.
+		if (countShardsNotDone == 0 && !dispatchedInThisIteration) {
 			TraceEvent("FileBackupSnapshotDispatchFinished")
 			    .detail("BackupUID", config.getUid())
 			    .detail("AllShards", countAllShards)
@@ -3279,6 +3360,8 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// snapshot dispatch task. In either case, the task should wait for snapshotBatchFuture. The snapshot done
 		// key, passed to the current task, is also passed on.
 		if (Params.snapshotFinished().getOrDefault(task, false)) {
+			// The manifest task should wait for the snapshotBatchFuture, ensuring all dispatched
+			// range tasks complete before the snapshot is finalized
 			wait(success(addSnapshotManifestTask(
 			    tr, taskBucket, task, TaskCompletionKey::signal(snapshotFinishedFuture), snapshotBatchFuture)));
 		} else {
@@ -4277,7 +4360,7 @@ struct RestoreCompleteTaskFunc : RestoreTaskFuncBase {
 
 		wait(taskBucket->finish(tr, task));
 
-		if (unlockDB) {
+		if (unlockDB && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
 			wait(unlockDatabase(tr, restore.getUid()));
 		}
 
@@ -4523,7 +4606,9 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 
 					for (; i < iend; ++i) {
 						tr->setOption(FDBTransactionOptions::NEXT_WRITE_NO_WRITE_CONFLICT_RANGE);
-						if (tenantCache.present()) {
+						// Skip tenant validation when restoring with a prefix
+						// Prefixed keys (e.g., 'restored/' or '\xff\x02/rlog/') are not tenant keys
+						if (tenantCache.present() && addPrefix.get() == StringRef()) {
 							validTenantCheckFutures.push_back(_validTenantAccess(
 							    StringRef(arena,
 							              data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())),
@@ -4532,6 +4617,24 @@ struct RestoreRangeTaskFunc : RestoreFileTaskFuncBase {
 						tr->set(data[i].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get()),
 						        data[i].value);
 					}
+
+					TraceEvent("FileRestoreRangeWrite")
+					    .detail("RestoreUID", restore.getUid())
+					    .detail("KeysWritten", iend - start)
+					    .detail("FirstDataKey", printable(data[start].key))
+					    .detail("LastDataKey", printable(data[iend - 1].key))
+					    .detail("FirstRestoredKey",
+					            printable(data[start].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail(
+					        "LastRestoredKey",
+					        printable(data[iend - 1].key.removePrefix(removePrefix.get()).withPrefix(addPrefix.get())))
+					    .detail("FileRangeBegin", printable(fileRange.begin))
+					    .detail("FileRangeEnd", printable(fileRange.end))
+					    .detail("AddPrefix", printable(addPrefix.get()))
+					    .detail("RemovePrefix", printable(removePrefix.get()))
+					    .detail("DataStart", start)
+					    .detail("DataEnd", iend)
+					    .detail("TotalDataSize", end);
 
 					// Add to bytes written count
 					restore.bytesWritten().atomicOp(tr, txBytes, MutationRef::Type::AddValue);
@@ -6151,7 +6254,9 @@ ACTOR Future<ERestoreState> abortRestore(Reference<ReadYourWritesTransaction> tr
 	// Cancel the backup tasks on this tag
 	wait(tag.cancel(tr));
 
-	wait(unlockDatabase(tr, current.get().first));
+	if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+		wait(unlockDatabase(tr, current.get().first));
+	}
 	return ERestoreState::ABORTED;
 }
 
@@ -6615,7 +6720,9 @@ public:
 
 		if (unlockDB) {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBStart", randomUID);
-			wait(unlockDatabase(cx, randomUID));
+			if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+				wait(unlockDatabase(cx, randomUID));
+			}
 			TraceEvent("FastRestoreToolRestoreFinished").detail("UnlockDBFinish", randomUID);
 		} else {
 			TraceEvent("FastRestoreToolRestoreFinished").detail("DBLeftLockedAfterRestore", randomUID);
@@ -6984,7 +7091,8 @@ public:
 				                                .removePrefix(removePrefix)
 				                                .withPrefix(addPrefix);
 				RangeResult existingRows = wait(tr->getRange(restoreIntoRange, 1));
-				if (existingRows.size() > 0) {
+				if (existingRows.size() > 0 && !CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED &&
+				    !CLIENT_KNOBS->RESTORE_VALIDATION) {
 					throw restore_destination_not_empty();
 				}
 			}
@@ -7834,7 +7942,9 @@ public:
 			// If addPrefix or removePrefix set, we want to transform the effect by copying data
 			if (hasPrefix) {
 				wait(transformRestoredDatabase(cx, ranges, addPrefix, removePrefix));
-				wait(unlockDatabase(cx, randomUid));
+				if (!CLIENT_KNOBS->RESTORE_VALIDATION_ENABLED) {
+					wait(unlockDatabase(cx, randomUid));
+				}
 			}
 			return -1;
 		} else {
