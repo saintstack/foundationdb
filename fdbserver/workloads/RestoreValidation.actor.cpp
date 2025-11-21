@@ -195,35 +195,36 @@ struct RestoreValidationWorkload : TestWorkload {
 				state AuditPhase finalPhase = AuditPhase::Invalid;
 				state std::string errorMessage;
 
-			loop {
-				wait(delay(self->checkInterval));
+				loop {
+					wait(delay(self->checkInterval));
 
-				// Get audit status (newFirst=true to get latest states first)
-				// Add timeout to handle cluster recovery/instability
-				state std::vector<AuditStorageState> auditStates;
-				try {
-					std::vector<AuditStorageState> states = wait(timeoutError(getAuditStates(cx, auditType, true), 60.0));
-					auditStates = states;
-				} catch (Error& e) {
-					if (e.code() == error_code_timed_out) {
-						// Cluster is likely recovering - check overall timeout and continue
-						if (now() - startTime > self->maxWaitTime) {
-							TraceEvent(SevError, "RestoreValidationTimeout")
-							    .detail("AuditID", auditId)
-							    .detail("ElapsedTime", now() - startTime)
-							    .detail("MaxWaitTime", self->maxWaitTime)
-							    .detail("Reason", "getAuditStates timed out");
-							throw timed_out();
+					// Get audit status (newFirst=true to get latest states first)
+					// Add timeout to handle cluster recovery/instability
+					state std::vector<AuditStorageState> auditStates;
+					try {
+						std::vector<AuditStorageState> states =
+						    wait(timeoutError(getAuditStates(cx, auditType, true), 60.0));
+						auditStates = states;
+					} catch (Error& e) {
+						if (e.code() == error_code_timed_out) {
+							// Cluster is likely recovering - check overall timeout and continue
+							if (now() - startTime > self->maxWaitTime) {
+								TraceEvent(SevError, "RestoreValidationTimeout")
+								    .detail("AuditID", auditId)
+								    .detail("ElapsedTime", now() - startTime)
+								    .detail("MaxWaitTime", self->maxWaitTime)
+								    .detail("Reason", "getAuditStates timed out");
+								throw timed_out();
+							}
+							continue; // Skip this iteration, try again
 						}
-						continue; // Skip this iteration, try again
+						throw;
 					}
-					throw;
-				}
 
-				// Filter for our audit ID
-				state bool foundOurAudit = false;
-				state bool allComplete = true;
-				state bool anyError = false;
+					// Filter for our audit ID
+					state bool foundOurAudit = false;
+					state bool allComplete = true;
+					state bool anyError = false;
 
 					for (const auto& state : auditStates) {
 						if (state.id == auditId) {

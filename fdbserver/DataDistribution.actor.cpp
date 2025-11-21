@@ -3574,8 +3574,8 @@ ACTOR Future<Void> auditStorageCore(Reference<DataDistributor> self,
 		    .detail("AuditID", auditID)
 		    .detail("AuditStorageCoreGeneration", currentRetryCount)
 		    .detail("RetryCount", audit->retryCount)
-	    .detail("AuditType", auditType)
-	    .detail("Range", audit->coreState.range);
+		    .detail("AuditType", auditType)
+		    .detail("Range", audit->coreState.range);
 		if (e.code() == error_code_movekeys_conflict) {
 			removeAuditFromAuditMap(self, audit->coreState.getType(),
 			                        audit->coreState.id); // remove audit
@@ -4664,21 +4664,21 @@ ACTOR Future<Void> doAuditOnStorageServer(Reference<DataDistributor> self,
 	try {
 		audit->overallIssuedDoAuditCount++;
 		ASSERT(req.ddId.isValid());
-	ErrorOr<AuditStorageState> vResult = wait(ssi.auditStorage.tryGetReply(req));
-	if (vResult.isError()) {
-		throw vResult.getError();
-	}
-	// Check if storage server found validation errors
-	if (vResult.get().getPhase() == AuditPhase::Error) {
-		audit->foundError = true;
-		TraceEvent(SevWarn, "DDDoAuditOnStorageServerFoundError", self->ddId)
-		    .detail("AuditID", req.id)
-		    .detail("Range", req.range)
-		    .detail("AuditType", auditType)
-		    .detail("Error", vResult.get().error);
-	}
-	audit->overallCompleteDoAuditCount++;
-	TraceEvent(SevInfo, "DDDoAuditOnStorageServerResult", self->ddId)
+		ErrorOr<AuditStorageState> vResult = wait(ssi.auditStorage.tryGetReply(req));
+		if (vResult.isError()) {
+			throw vResult.getError();
+		}
+		// Check if storage server found validation errors
+		if (vResult.get().getPhase() == AuditPhase::Error) {
+			audit->foundError = true;
+			TraceEvent(SevWarn, "DDDoAuditOnStorageServerFoundError", self->ddId)
+			    .detail("AuditID", req.id)
+			    .detail("Range", req.range)
+			    .detail("AuditType", auditType)
+			    .detail("Error", vResult.get().error);
+		}
+		audit->overallCompleteDoAuditCount++;
+		TraceEvent(SevInfo, "DDDoAuditOnStorageServerResult", self->ddId)
 		    .detail("AuditID", req.id)
 		    .detail("Range", req.range)
 		    .detail("AuditType", auditType)
