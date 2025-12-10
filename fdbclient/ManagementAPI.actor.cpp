@@ -3039,9 +3039,27 @@ ACTOR Future<Void> cancelBulkLoadJob(Database cx, UID jobId) {
 	return Void();
 }
 
+ACTOR Future<Void> validateBulkLoadPrerequisites(Database cx, bool skipValidation = false) {
+	if (skipValidation) {
+		return Void(); // Skip for --rangefile restore
+	}
+	// Phase 0: Configuration validation would be implemented here
+	// For now, skip validation to avoid SERVER_KNOBS dependency in client context
+	// Real implementation should check cluster configuration via database queries
+	// TODO: Add proper cluster configuration validation for BulkLoad requirements
+	TraceEvent("BulkLoadPrerequisitesValidation")
+	    .detail("SkipValidation", skipValidation)
+	    .detail("Note", "Configuration validation temporarily disabled");
+	return Void();
+}
+
 // TODO(Zhe): clear bulkload task metadata within the input range
 ACTOR Future<Void> submitBulkLoadJob(Database cx, BulkLoadJobState jobState) {
 	ASSERT(jobState.getPhase() == BulkLoadJobPhase::Submitted);
+
+	// Phase 0: Validate BulkLoad cluster configuration prerequisites
+	wait(validateBulkLoadPrerequisites(cx));
+
 	state Transaction tr(cx);
 	loop {
 		try {

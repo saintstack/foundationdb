@@ -1,0 +1,15 @@
+# BulkLoad to Restore Integration Test Configuration
+# Simple test that exercises the BulkLoadRestoreValidation workload
+
+[[test]]
+testTitle = "BulkLoadRestoreIntegration"
+timeout = 600
+databasePerTest = true
+minimumReplication = 1
+maximumReplication = 1
+
+    # Test our custom BulkLoadRestoreValidation workload only
+    [[test.workload]]
+    testName = "BulkLoadRestoreValidation"
+    testDuration = 30.0
+    keyCount = 10
