@@ -1643,6 +1643,20 @@ ACTOR Future<int> cli(CLIOptions opt, LineNoise* plinenoise, Reference<ClusterCo
 					continue;
 				}
 
+				if (tokencmp(tokens[0], "checkmetrics")) {
+					bool _result = wait(makeInterruptable(checkmetricsCommandActor(localDb, tokens)));
+					if (!_result)
+						is_error = true;
+					continue;
+				}
+
+				if (tokencmp(tokens[0], "shardsfor")) {
+					bool _result = wait(makeInterruptable(shardsforCommandActor(localDb, tokens)));
+					if (!_result)
+						is_error = true;
+					continue;
+				}
+
 				if (tokencmp(tokens[0], "getversion")) {
 					if (tokens.size() != 1) {
 						printUsage(tokens[0]);

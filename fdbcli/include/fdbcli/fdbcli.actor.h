@@ -295,6 +295,8 @@ ACTOR Future<bool> rangeConfigCommandActor(Database cx, std::vector<StringRef> t
 ACTOR Future<bool> getLocationCommandActor(Database cx, std::vector<StringRef> tokens);
 ACTOR Future<bool> getallCommandActor(Database cx, std::vector<StringRef> tokens, Version version);
 ACTOR Future<bool> checkallCommandActor(Database cx, std::vector<StringRef> tokens);
+ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> tokens);
+ACTOR Future<bool> shardsforCommandActor(Database cx, std::vector<StringRef> tokens);
 } // namespace fdb_cli
 
 #include "flow/unactorcompiler.h"

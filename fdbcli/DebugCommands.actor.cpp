@@ -489,4 +489,158 @@ ACTOR Future<bool> checkallCommandActor(Database cx, std::vector<StringRef> toke
 }
 
 CommandFactory checkallCommandFactory("checkall");
+
+// Diagnostic command: probe each SS for each shard and report wrong_shard_server errors.
+// This helps diagnose DD issues where the shard map is stale and SS returns wrong_shard_server
+// because it doesn't (or no longer) own the requested key range.
+ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> tokens) {
+	if (tokens.size() != 1 && tokens.size() != 3) {
+		printf("checkmetrics [<BEGIN_KEY> <END_KEY>]\n"
+		       "Probe each storage server for each shard with a WaitMetricsRequest.\n"
+		       "Reports which SS/shard combinations return wrong_shard_server.\n"
+		       "With no arguments, scans the entire keyspace.\n");
+		return false;
+	}
+
+	state KeyRange range;
+	if (tokens.size() == 3) {
+		range = KeyRangeRef(tokens[1], tokens[2]);
+	} else {
+		range = KeyRangeRef(""_sr, "\xff"_sr);
+	}
+
+	printf("Scanning shard map for range: %s - %s\n", toHex(range.begin).c_str(), toHex(range.end).c_str());
+
+	state Key scanBegin = range.begin;
+	state int totalErrors = 0;
+	state int totalProbes = 0;
+	state int totalShards = 0;
+
+	while (scanBegin < range.end) {
+		state KeyRange batchRange = KeyRangeRef(scanBegin, range.end);
+		state Promise<std::vector<std::pair<KeyRange, std::vector<StorageServerInterface>>>> keyServersPromise;
+		bool found = wait(getKeyServers(cx, keyServersPromise, batchRange, Optional<StringRef>()));
+		if (!found) {
+			printf("ERROR: Could not get key server locations at %s\n", toHex(scanBegin).c_str());
+			return false;
+		}
+
+		state std::vector<std::pair<KeyRange, std::vector<StorageServerInterface>>> keyServers =
+		    keyServersPromise.getFuture().get();
+		if (keyServers.empty()) {
+			break;
+		}
+
+		totalShards += keyServers.size();
+		printf("  Fetched %lu shards (%d total so far, scan at %s)\n",
+		       (unsigned long)keyServers.size(),
+		       totalShards,
+		       toHex(scanBegin).c_str());
+
+		state int shardIdx = 0;
+		for (; shardIdx < keyServers.size(); shardIdx++) {
+			state KeyRange shardRange = keyServers[shardIdx].first;
+			state std::vector<StorageServerInterface> servers = keyServers[shardIdx].second;
+
+			// Construct a WaitMetricsRequest that triggers immediate response.
+			// Setting max.bytes = -1 means max < current bytes, so SS returns immediately.
+			state std::vector<Future<ErrorOr<StorageMetrics>>> replies;
+			for (int s = 0; s < servers.size(); s++) {
+				WaitMetricsRequest req(TenantInfo(), latestVersion, shardRange, StorageMetrics(), StorageMetrics());
+				req.min.bytes = 0;
+				req.max.bytes = -1;
+				replies.push_back(servers[s].waitMetrics.getReplyUnlessFailedFor(req, 10, 0));
+				totalProbes++;
+			}
+			wait(waitForAll(replies));
+
+			state bool shardHasError = false;
+			for (int s = 0; s < replies.size(); s++) {
+				ErrorOr<StorageMetrics> result = replies[s].get();
+				if (result.isError()) {
+					if (!shardHasError) {
+						printf("\nShard %d: %s - %s\n",
+						       totalShards - (int)keyServers.size() + shardIdx + 1,
+						       toHex(shardRange.begin).c_str(),
+						       toHex(shardRange.end).c_str());
+						shardHasError = true;
+					}
+					printf("  ERROR  %s : %s (%s)\n",
+					       servers[s].address().toString().c_str(),
+					       result.getError().name(),
+					       result.getError().what());
+					totalErrors++;
+				}
+			}
+		}
+
+		// Advance past this batch
+		scanBegin = keyServers.back().first.end;
+	}
+
+	printf("\nDone. Probed %d SS across %d shards. %d errors found.\n", totalProbes, totalShards, totalErrors);
+	return true;
+}
+CommandFactory checkmetricsCommandFactory("checkmetrics");
+
+// List all shards assigned to a specific storage server address.
+ACTOR Future<bool> shardsforCommandActor(Database cx, std::vector<StringRef> tokens) {
+	if (tokens.size() != 2) {
+		printf("shardsfor <ADDRESS>\n"
+		       "List all shards in the shard map assigned to the given storage server address.\n"
+		       "Example: shardsfor 100.103.0.29:4501\n");
+		return false;
+	}
+
+	state std::string targetAddr = tokens[1].toString();
+	state Key scanBegin = ""_sr;
+	state Key scanEnd = "\xff\xff"_sr;
+	state int totalShards = 0;
+	state int matchedShards = 0;
+
+	printf("Scanning for shards assigned to %s ...\n", targetAddr.c_str());
+
+	while (scanBegin < scanEnd) {
+		state KeyRange batchRange = KeyRangeRef(scanBegin, scanEnd);
+		state Promise<std::vector<std::pair<KeyRange, std::vector<StorageServerInterface>>>> keyServersPromise;
+		bool found = wait(getKeyServers(cx, keyServersPromise, batchRange, Optional<StringRef>()));
+		if (!found) {
+			printf("ERROR: Could not get key server locations at %s\n", toHex(scanBegin).c_str());
+			return false;
+		}
+
+		state std::vector<std::pair<KeyRange, std::vector<StorageServerInterface>>> keyServers =
+		    keyServersPromise.getFuture().get();
+		if (keyServers.empty()) {
+			break;
+		}
+
+		totalShards += keyServers.size();
+
+		for (int i = 0; i < keyServers.size(); i++) {
+			for (const auto& server : keyServers[i].second) {
+				if (server.address().toString() == targetAddr) {
+					matchedShards++;
+					printf("Shard %d: %s - %s  (%lu replicas)\n",
+					       totalShards - (int)keyServers.size() + i + 1,
+					       toHex(keyServers[i].first.begin).c_str(),
+					       toHex(keyServers[i].first.end).c_str(),
+					       (unsigned long)keyServers[i].second.size());
+					break;
+				}
+			}
+		}
+
+		if (totalShards % 5000 == 0) {
+			printf("  ... scanned %d shards, %d matched so far\n", totalShards, matchedShards);
+		}
+
+		scanBegin = keyServers.back().first.end;
+	}
+
+	printf("\nDone. Scanned %d shards. %d assigned to %s.\n", totalShards, matchedShards, targetAddr.c_str());
+	return true;
+}
+CommandFactory shardsforCommandFactory("shardsfor");
+
 } // namespace fdb_cli
