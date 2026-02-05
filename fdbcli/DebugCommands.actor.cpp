@@ -490,14 +490,14 @@ ACTOR Future<bool> checkallCommandActor(Database cx, std::vector<StringRef> toke
 
 CommandFactory checkallCommandFactory("checkall");
 
-// Diagnostic command: probe each SS for each shard and report wrong_shard_server errors.
-// This helps diagnose DD issues where the shard map is stale and SS returns wrong_shard_server
-// because it doesn't (or no longer) own the requested key range.
+// Diagnostic command: probe each SS for each shard and verify replicas respond.
+// Reports under-replicated shards (fewer than 3 working replicas) and shards
+// where storage servers return wrong_shard_server.
 ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> tokens) {
 	if (tokens.size() != 1 && tokens.size() != 3) {
 		printf("checkmetrics [<BEGIN_KEY> <END_KEY>]\n"
 		       "Probe each storage server for each shard with a WaitMetricsRequest.\n"
-		       "Reports which SS/shard combinations return wrong_shard_server.\n"
+		       "Verifies each replica responds and flags under-replicated shards.\n"
 		       "With no arguments, scans the entire keyspace.\n");
 		return false;
 	}
@@ -515,6 +515,10 @@ ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> 
 	state int totalErrors = 0;
 	state int totalProbes = 0;
 	state int totalShards = 0;
+	state int shardsWithZero = 0;
+	state int shardsWithOne = 0;
+	state int shardsWithTwo = 0;
+	state int shardsHealthy = 0;
 
 	while (scanBegin < range.end) {
 		state KeyRange batchRange = KeyRangeRef(scanBegin, range.end);
@@ -541,6 +545,7 @@ ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> 
 		for (; shardIdx < keyServers.size(); shardIdx++) {
 			state KeyRange shardRange = keyServers[shardIdx].first;
 			state std::vector<StorageServerInterface> servers = keyServers[shardIdx].second;
+			state int shardNum = totalShards - (int)keyServers.size() + shardIdx + 1;
 
 			// Construct a WaitMetricsRequest that triggers immediate response.
 			// Setting max.bytes = -1 means max < current bytes, so SS returns immediately.
@@ -554,22 +559,48 @@ ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> 
 			}
 			wait(waitForAll(replies));
 
-			state bool shardHasError = false;
+			state int okCount = 0;
+			state int errCount = 0;
 			for (int s = 0; s < replies.size(); s++) {
 				ErrorOr<StorageMetrics> result = replies[s].get();
 				if (result.isError()) {
-					if (!shardHasError) {
-						printf("\nShard %d: %s - %s\n",
-						       totalShards - (int)keyServers.size() + shardIdx + 1,
-						       toHex(shardRange.begin).c_str(),
-						       toHex(shardRange.end).c_str());
-						shardHasError = true;
-					}
-					printf("  ERROR  %s : %s (%s)\n",
-					       servers[s].address().toString().c_str(),
-					       result.getError().name(),
-					       result.getError().what());
+					errCount++;
 					totalErrors++;
+				} else {
+					okCount++;
+				}
+			}
+
+			if (okCount >= 3) {
+				shardsHealthy++;
+			} else {
+				// Print header with severity
+				const char* label = okCount == 2 ? "2 replicas" : okCount == 1 ? "1 REPLICA ONLY" : "NO REPLICAS";
+				printf("\nShard %d [%s]: %s - %s\n",
+				       shardNum,
+				       label,
+				       toHex(shardRange.begin).c_str(),
+				       toHex(shardRange.end).c_str());
+
+				// Print each server with its status
+				for (int s = 0; s < replies.size(); s++) {
+					ErrorOr<StorageMetrics> result = replies[s].get();
+					if (result.isError()) {
+						printf("  ERROR  %s : %s (%s)\n",
+						       servers[s].address().toString().c_str(),
+						       result.getError().name(),
+						       result.getError().what());
+					} else {
+						printf("  OK     %s\n", servers[s].address().toString().c_str());
+					}
+				}
+
+				if (okCount == 2) {
+					shardsWithTwo++;
+				} else if (okCount == 1) {
+					shardsWithOne++;
+				} else {
+					shardsWithZero++;
 				}
 			}
 		}
@@ -578,7 +609,13 @@ ACTOR Future<bool> checkmetricsCommandActor(Database cx, std::vector<StringRef> 
 		scanBegin = keyServers.back().first.end;
 	}
 
-	printf("\nDone. Probed %d SS across %d shards. %d errors found.\n", totalProbes, totalShards, totalErrors);
+	printf("\n--- Summary ---\n");
+	printf("Total shards: %d\n", totalShards);
+	printf("Total probes: %d, total errors: %d\n", totalProbes, totalErrors);
+	printf("  Healthy (3+ replicas): %d\n", shardsHealthy);
+	printf("  2 replicas (under-replicated): %d\n", shardsWithTwo);
+	printf("  1 replica only (critical): %d\n", shardsWithOne);
+	printf("  0 replicas (data unavailable): %d\n", shardsWithZero);
 	return true;
 }
 CommandFactory checkmetricsCommandFactory("checkmetrics");
