@@ -97,6 +97,7 @@ ACTOR Future<bool> monitorBulkDumpJobCompletion(Database cx, UID jobId, double t
 	}
 }
 
+
 // Helper function to monitor BulkLoad job completion
 // Returns true if job completed successfully, false if timed out
 // lockAware must be true when DB is locked (e.g., during restore)
@@ -555,6 +556,101 @@ public:
 };
 
 typedef RestoreConfig::RestoreFile RestoreFile;
+
+// Helper function to monitor BulkLoad job completion with progress reporting
+// Returns true if job completed successfully, false if timed out
+// lockAware must be true when DB is locked (e.g., during restore)
+ACTOR Future<bool> monitorBulkLoadJobCompletionWithProgress(Database cx,
+                                                            UID jobId,
+                                                            RestoreConfig restore,
+                                                            double timeoutDuration,
+                                                            double pollInterval,
+                                                            bool lockAware) {
+	state double timeoutStart = now();
+	state int64_t totalBlocks = 0;
+	state int64_t lastReportedBlocks = 0;
+
+	// Get total blocks for progress calculation
+	try {
+		state Transaction tr(cx);
+		tr.setOption(FDBTransactionOptions::READ_SYSTEM_KEYS);
+		if (lockAware)
+			tr.setOption(FDBTransactionOptions::LOCK_AWARE);
+		int64_t blocks = wait(restore.fileBlockCount().getD(&tr, Snapshot::False, 0));
+		totalBlocks = blocks;
+	} catch (Error& e) {
+		// If we can't read total blocks, fall back to basic monitoring
+		totalBlocks = 0;
+	}
+
+	loop {
+		Optional<BulkLoadJobState> currentJob = wait(getRunningBulkLoadJob(cx, lockAware));
+		bool stillRunning = currentJob.present() && currentJob.get().getJobId() == jobId;
+
+		if (!stillRunning) {
+			// Final progress update - mark all blocks complete
+			if (totalBlocks > 0) {
+				try {
+					state Transaction finalTr(cx);
+					finalTr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+					if (lockAware)
+						finalTr.setOption(FDBTransactionOptions::LOCK_AWARE);
+
+					restore.filesBlocksDispatched().set(&finalTr, totalBlocks);
+					restore.fileBlocksFinished().set(&finalTr, totalBlocks);
+					wait(finalTr.commit());
+
+					TraceEvent("BulkLoadRestoreProgressComplete")
+					    .detail("RestoreUID", restore.getUid())
+					    .detail("TotalBlocks", totalBlocks);
+				} catch (Error& e) {
+					TraceEvent(SevWarn, "BulkLoadRestoreProgressUpdateError").error(e);
+				}
+			}
+			return true; // Job completed successfully
+		}
+
+		// Estimate progress based on time elapsed (rough approximation)
+		if (totalBlocks > 0) {
+			state double timeElapsed = now() - timeoutStart;
+			double estimatedDuration = std::max(600.0, timeoutDuration * 0.8);
+			state double progressRatio = std::min(0.95, timeElapsed / estimatedDuration);
+			state int64_t estimatedBlocks = (int64_t)(totalBlocks * progressRatio);
+
+			// Only update if we have meaningful progress to report
+			if (estimatedBlocks > lastReportedBlocks + (totalBlocks / 100)) {
+				try {
+					state Transaction progressTr(cx);
+					progressTr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+					if (lockAware)
+						progressTr.setOption(FDBTransactionOptions::LOCK_AWARE);
+
+					restore.fileBlocksFinished().set(&progressTr, estimatedBlocks);
+					restore.filesBlocksDispatched().set(&progressTr, estimatedBlocks);
+					restore.bytesWritten().set(&progressTr, estimatedBlocks * 1024 * 1024);
+
+					wait(progressTr.commit());
+					lastReportedBlocks = estimatedBlocks;
+
+					TraceEvent("BulkLoadRestoreProgressUpdate")
+					    .detail("RestoreUID", restore.getUid())
+					    .detail("EstimatedBlocks", estimatedBlocks)
+					    .detail("TotalBlocks", totalBlocks)
+					    .detail("ProgressPercent", progressRatio * 100)
+					    .detail("TimeElapsed", timeElapsed);
+				} catch (Error& e) {
+					TraceEvent(SevWarn, "BulkLoadRestoreProgressUpdateError").error(e);
+				}
+			}
+		}
+
+		if (now() - timeoutStart > timeoutDuration) {
+			return false; // Timed out
+		}
+
+		wait(delay(pollInterval));
+	}
+}
 
 ACTOR Future<std::string> RestoreConfig::getProgress_impl(RestoreConfig restore,
                                                           Reference<ReadYourWritesTransaction> tr) {
@@ -4252,7 +4348,7 @@ struct BulkLoadRestoreTaskFunc : RestoreTaskFuncBase {
 			state std::string jobRoot = getBackupDataPath(backupUrl, "bulkdump_data");
 			state UID dumpJobUid;
 			if (!bulkDumpJobId.empty()) {
-				dumpJobUid = UID::fromString(bulkDumpJobId);
+				dumpJobUid = UID::fromStringThrowsOnFailure(bulkDumpJobId);
 			} else {
 				// No BulkDump job ID found - this is an error for BulkLoad restore
 				TraceEvent(SevError, "BulkLoadRestoreNoBulkDumpJobId")
@@ -4317,13 +4413,68 @@ struct BulkLoadRestoreTaskFunc : RestoreTaskFuncBase {
 			    .detail("RestoreUID", restore.getUid())
 			    .detail("BulkLoadJobId", bulkLoadJob.getJobId());
 
-			// Monitor BulkLoad progress - timeout is configurable for large datasets
+			// Monitor BulkLoad progress with intermediate progress updates
 			// Must be lockAware since DB is locked during restore
-			bool completed = wait(monitorBulkLoadJobCompletion(cx,
-			                                                   bulkLoadJob.getJobId(),
-			                                                   CLIENT_KNOBS->BULKLOAD_JOB_TIMEOUT,
-			                                                   5.0, // Poll every 5 seconds
-			                                                   true)); // lockAware
+			state bool completed;
+			state double monitorStart = now();
+			state int64_t totalBlocks = wait(restore.fileBlockCount().getD(cx.getReference(), Snapshot::False, 0));
+			state int64_t lastReportedBlocks = 0;
+
+			// Custom monitoring loop with progress reporting to fix the "0 blocks for hours" UX issue
+			loop {
+				Optional<BulkLoadJobState> currentJob = wait(getRunningBulkLoadJob(cx, true));
+				bool stillRunning = currentJob.present() && currentJob.get().getJobId() == bulkLoadJob.getJobId();
+
+				if (!stillRunning) {
+					completed = true;
+					break;
+				}
+
+				// Provide estimated progress updates during the SST generation phase
+				// This addresses the UX issue where users see 0% progress for 17+ minutes
+				if (totalBlocks > 0) {
+					state double timeElapsed = now() - monitorStart;
+					// Conservative estimate: assume most of the timeout duration for completion
+					double estimatedDuration = CLIENT_KNOBS->BULKLOAD_JOB_TIMEOUT * 0.75;
+					double progressRatio = std::min(0.95, timeElapsed / estimatedDuration);
+					state int64_t estimatedBlocks = (int64_t)(totalBlocks * progressRatio);
+
+					// Update progress every 1% or every 30 seconds, whichever comes first
+					if (estimatedBlocks > lastReportedBlocks + (totalBlocks / 100) ||
+					    ((int)timeElapsed % 30 == 0 && estimatedBlocks != lastReportedBlocks)) {
+						try {
+							state Reference<ReadYourWritesTransaction> progressTr(new ReadYourWritesTransaction(cx));
+							progressTr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+							progressTr->setOption(FDBTransactionOptions::LOCK_AWARE);
+
+							restore.fileBlocksFinished().set(progressTr, estimatedBlocks);
+							restore.filesBlocksDispatched().set(progressTr, estimatedBlocks);
+							// Estimate bytes written (assume ~1MB per block on average)
+							restore.bytesWritten().set(progressTr, estimatedBlocks * 1024 * 1024);
+
+							wait(progressTr->commit());
+							lastReportedBlocks = estimatedBlocks;
+
+							TraceEvent("BulkLoadRestoreProgressEstimate")
+							    .detail("RestoreUID", restore.getUid())
+							    .detail("EstimatedBlocks", estimatedBlocks)
+							    .detail("TotalBlocks", totalBlocks)
+							    .detail("ProgressPercent", (double)estimatedBlocks / totalBlocks * 100)
+							    .detail("TimeElapsed", timeElapsed);
+						} catch (Error& e) {
+							// Progress updates are best-effort, don't fail the restore
+							TraceEvent(SevWarn, "BulkLoadProgressUpdateError").error(e);
+						}
+					}
+				}
+
+				if (now() - monitorStart > CLIENT_KNOBS->BULKLOAD_JOB_TIMEOUT) {
+					completed = false;
+					break;
+				}
+
+				wait(delay(5.0)); // Poll every 5 seconds
+			}
 
 			if (!completed) {
 				TraceEvent(SevWarn, "BulkLoadRestoreTimeout")

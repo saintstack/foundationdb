@@ -122,7 +122,7 @@ ACTOR Future<Void> printBulkLoadJobProgress(Database cx, BulkLoadJobState job) {
 					fmt::println("Error {} tasks", errorTaskCount);
 					printBulkLoadJobTotalTaskCount(totalTaskCount);
 					if (bulkLoadTask.phase == BulkLoadPhase::Submitted &&
-					    bulkLoadTask.getJobId() != UID::fromString("00000000-0000-0000-0000-000000000000")) {
+					    bulkLoadTask.getJobId() != UID()) {
 						fmt::println("Job {} has been cancelled or has completed", jobId.toString());
 					}
 					return Void();
@@ -187,7 +187,15 @@ ACTOR Future<UID> bulkLoadCommandActor(Database cx, std::vector<StringRef> token
 			fmt::println("{}", BULK_LOAD_LOAD_USAGE);
 			return UID();
 		}
-		UID jobId = UID::fromString(tokens[2].toString());
+		UID jobId;
+		try {
+			jobId = UID::fromStringThrowsOnFailure(tokens[2].toString());
+		} catch (Error&) {
+			fmt::println("ERROR: Invalid job id '{}' (expected 32 hex characters, e.g. a bulkdump job UID)",
+			             tokens[2].toString());
+			fmt::println("{}", BULK_LOAD_LOAD_USAGE);
+			return UID();
+		}
 		if (!jobId.isValid()) {
 			fmt::println("ERROR: Invalid job id {}", tokens[2].toString());
 			fmt::println("{}", BULK_LOAD_LOAD_USAGE);
@@ -216,7 +224,14 @@ ACTOR Future<UID> bulkLoadCommandActor(Database cx, std::vector<StringRef> token
 			fmt::println("{}", BULK_LOAD_CANCEL_USAGE);
 			return UID();
 		}
-		state UID jobId = UID::fromString(tokens[2].toString());
+		state UID jobId;
+		try {
+			jobId = UID::fromStringThrowsOnFailure(tokens[2].toString());
+		} catch (Error&) {
+			fmt::println("ERROR: Invalid job id '{}' (expected 32 hex characters)", tokens[2].toString());
+			fmt::println("{}", BULK_LOAD_CANCEL_USAGE);
+			return UID();
+		}
 		if (!jobId.isValid()) {
 			fmt::println("ERROR: Invalid job id {}", tokens[2].toString());
 			fmt::println("{}", BULK_LOAD_CANCEL_USAGE);
@@ -275,7 +290,15 @@ ACTOR Future<UID> bulkLoadCommandActor(Database cx, std::vector<StringRef> token
 		}
 		if (tokens.size() == 5) {
 			if (tokencmp(tokens[2], "clear") && tokencmp(tokens[3], "id")) {
-				UID jobId = UID::fromString(tokens[4].toString());
+				UID jobId;
+				try {
+					jobId = UID::fromStringThrowsOnFailure(tokens[4].toString());
+				} catch (Error&) {
+					fmt::println("ERROR: Invalid job id '{}' (expected 32 hex characters)",
+					             tokens[4].toString());
+					fmt::println("{}", BULK_LOAD_HISTORY_CLEAR_USAGE);
+					return UID();
+				}
 				if (!jobId.isValid()) {
 					fmt::println("ERROR: Invalid job id {}", tokens[4].toString());
 					fmt::println("{}", BULK_LOAD_HISTORY_CLEAR_USAGE);

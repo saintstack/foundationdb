@@ -961,18 +961,31 @@ public:
 		tr->setOption(FDBTransactionOptions::READ_LOCK_AWARE);
 		auto lastLog = latestLogEndVersion().get(tr);
 		auto firstSnapshot = firstSnapshotEndVersion().get(tr);
+		auto latestSnapshot = latestSnapshotEndVersion().get(tr);
 		auto plogEnabled = partitionedLogEnabled().get(tr);
 		auto workerVersion = latestBackupWorkerSavedVersion().get(tr);
 		auto incrementalBackup = incrementalBackupOnly().get(tr);
-		return map(success(lastLog) && success(firstSnapshot) && success(plogEnabled) && success(workerVersion) &&
-		               success(incrementalBackup),
+		auto snapshotModeOpt = snapshotMode().get(tr);
+		return map(success(lastLog) && success(firstSnapshot) && success(latestSnapshot) && success(plogEnabled) &&
+		               success(workerVersion) && success(incrementalBackup) && success(snapshotModeOpt),
 		           [=](Void) -> Optional<Version> {
 			           // The latest log greater than the oldest snapshot is the restorable version
 			           Optional<Version> logVersion =
 			               plogEnabled.get().present() && plogEnabled.get().get() ? workerVersion.get() : lastLog.get();
-			           if (logVersion.present() && firstSnapshot.get().present() &&
-			               logVersion.get() > firstSnapshot.get().get()) {
-				           return std::max(logVersion.get() - 1, firstSnapshot.get().get());
+
+			           // FIX: For mode="both" (2) and "bulkdump" (1), wait for latestSnapshotEndVersion
+			           // This ensures BulkDump snapshot completion before marking backup restorable
+			           int mode = snapshotModeOpt.get().present() ? snapshotModeOpt.get().get() : 0;
+			           bool needLatestSnapshot = (mode == 1 || mode == 2); // BULKDUMP or BOTH modes
+
+			           Optional<Version> snapshotVersion = firstSnapshot.get();
+			           if (needLatestSnapshot && latestSnapshot.get().present()) {
+				           snapshotVersion = latestSnapshot.get();
+			           }
+
+			           if (logVersion.present() && snapshotVersion.present() &&
+			               logVersion.get() > snapshotVersion.get()) {
+				           return std::max(logVersion.get() - 1, snapshotVersion.get());
 			           }
 			           if (logVersion.present() && incrementalBackup.isReady() && incrementalBackup.get().present() &&
 			               incrementalBackup.get().get()) {
