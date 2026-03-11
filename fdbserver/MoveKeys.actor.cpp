@@ -2812,6 +2812,21 @@ ACTOR Future<Void> removeKeysFromFailedServer(Database cx,
 				    .detail("End", currentKeys.end);
 				wait(krmSetRangeCoalescing(&tr, serverKeysPrefixFor(serverID), currentKeys, allKeys, serverKeysFalse));
 				wait(tr.commit());
+
+				// Force crash after first batch to test phantom shard creation.
+				// Uses static set to only crash once per server per simulation.
+				if (g_network->isSimulated() && currentKeys.end != allKeys.end) {
+					static std::set<UID> crashedServers;
+					if (crashedServers.find(serverID) == crashedServers.end()) {
+						crashedServers.insert(serverID);
+						TraceEvent(SevWarnAlways, "ForcedPhantomShardCrash", serverID)
+						    .detail("CurrentKeys", currentKeys)
+						    .detail("Begin", begin)
+						    .detail("MoreShardsRemaining", true);
+						throw please_reboot();
+					}
+				}
+
 				TraceEvent(SevDebug, "FailedServerCommitSuccess", serverID)
 				    .detail("Begin", currentKeys.begin)
 				    .detail("End", currentKeys.end)

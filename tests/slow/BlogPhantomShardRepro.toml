@@ -1,0 +1,71 @@
+# BlogPhantomShardRepro.toml
+#
+# Test to reproduce the blog phantom shard bug where keyServers entries
+# exist without corresponding serverKeys entries.
+#
+# Uses DR backup (BackupToDBCorrectness) which creates blog ranges at \xff\x02/blog/
+# combined with machine failures (Attrition) to trigger removeKeysFromFailedServer.
+#
+# Run with:
+#   ./bin/fdbserver -r simulation -f ../tests/slow/BlogPhantomShardRepro.toml -b on -s <seed>
+
+[configuration]
+config = "triple"
+buggify = true
+storageEngineType = 3
+# Need extra database for DR backup
+extraDatabaseMode = "Single"
+extraDatabaseCount = 1
+
+# Force smaller batches in removeKeysFromFailedServer to create multiple transactions
+[[knobs]]
+move_keys_krm_limit = 2
+move_keys_krm_limit_bytes = 1000
+
+[[test]]
+testTitle = "BlogPhantomShardRepro"
+runSetup = true
+clearAfterTest = false
+simBackupAgents = "BackupToDB"
+timeout = 600
+
+# Run DR backup workload - this creates blog entries
+[[test.workload]]
+testName = "BackupToDBCorrectness"
+backupAfter = 5.0
+restoreAfter = 400.0
+performRestore = false
+backupRangesCount = 3
+differentialBackup = true
+stopDifferentialAfter = 300.0
+
+# Generate mutations that get logged to blog (no strict rate requirements)
+[[test.workload]]
+testName = "ReadWrite"
+testDuration = 200.0
+readsPerTransactionA = 5
+writesPerTransactionA = 5
+nodeCount = 10000
+
+# Kill machines PERMANENTLY to trigger removeKeysFromFailedServer
+# reboot=false ensures servers are marked as failed, not just restarted
+[[test.workload]]
+testName = "Attrition"
+testDuration = 200.0
+machinesToKill = 2
+machinesToLeave = 4
+reboot = false
+killMachine = true
+killProcess = true
+allowFaultInjection = true
+
+# Our phantom shard check - runs for 150s to give blog data time to be created
+[[test.workload]]
+testName = "BlogPhantomShardRepro"
+testDuration = 150.0
+backupStartDelay = 0.0
+mutationPhaseDelay = 0.0
+killServerDelay = 0.0
+mutationCount = 0
+mutationBatchSize = 100
+injectDDCrash = false

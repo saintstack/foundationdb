@@ -1,0 +1,85 @@
+# BlogPhantomShardReproBuggify.toml
+#
+# Alternative test that relies on BUGGIFY to inject faults during
+# removeKeysFromFailedServer, rather than explicit process killing.
+#
+# This test runs a normal backup workload with aggressive BUGGIFY settings
+# that are likely to trigger the phantom shard bug.
+#
+# Run with:
+#   ./bin/fdbserver -r simulation -f ../tests/slow/BlogPhantomShardReproBuggify.toml -b on -s <seed>
+
+[configuration]
+config = "triple"
+buggify = true
+storageEngineType = 3
+# Allow machine/process failures
+machineCount = 9
+processesPerMachine = 1
+
+[[knobs]]
+# Reduce batch size for removeKeysFromFailedServer to create more transaction boundaries
+MOVE_KEYS_KRM_LIMIT = 50
+MOVE_KEYS_KRM_LIMIT_BYTES = 50000
+
+# Smaller log blocks = more blog shards
+LOG_RANGE_BLOCK_SIZE = 5000
+
+# Aggressive failure detection
+DD_FAILURE_TIME = 0.5
+DD_ZERO_HEALTHY_TEAM_DELAY = 0.5
+SERVER_KNOBS_FAILURE_DETECTION_DELAY = 1.0
+
+# Increase likelihood of transaction conflicts and retries
+MAX_TRANSACTION_DURATION = 3.0
+
+# More frequent backup log dispatch
+BACKUP_POLL_PROGRESS_SECONDS = 1.0
+
+[[test]]
+testTitle = "BlogPhantomShardReproBuggify"
+runSetup = true
+clearAfterTest = false
+simBackupAgents = "BackupToFile"
+timeout = 600
+
+# Run backup workload to generate blog data
+[[test.workload]]
+testName = "BackupAndRestoreCorrectness"
+backupAfter = 5.0
+restoreAfter = 300.0
+performRestore = false
+backupRangesCount = 5
+differentialBackup = true
+stopDifferentialAfter = 250.0
+
+# Concurrent writes to generate mutations
+[[test.workload]]
+testName = "RandomClogging"
+testDuration = 200.0
+
+# Inject random machine failures
+[[test.workload]]
+testName = "Attrition"
+testDuration = 200.0
+machinesToKill = 2
+machinesToLeave = 3
+reboot = true
+killDc = false
+killMachine = true
+killDatahall = false
+killProcess = true
+killZone = false
+killSelf = false
+waitForVersion = false
+allowFaultInjection = true
+
+# Also add some swizzle clogging for more chaos
+[[test.workload]]
+testName = "SwizzledRollbackSideband"
+testDuration = 200.0
+
+# Final consistency check
+[[test.workload]]
+testName = "ConsistencyCheck"
+performQuiescentChecks = true
