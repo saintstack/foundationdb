@@ -4284,61 +4284,68 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 	    .detail("Limit", limit)
 	    .detail("LimitBytes", limitBytes);
 
-	// Read source data from user key range (this SS must own it since DD sent request here)
-	state Future<ErrorOr<GetKeyValuesReply>> sourceFuture =
-	    issueGetKeyValuesRequest(data, rangeToRead, version, limit, limitBytes);
-
-	// Read restored data from system key space
-	// NOTE: Use database transaction to read system keys since this SS might not own them
-	// IMPORTANT: Use same byte limits as source query to ensure comparable results, since restored keys
-	// are larger (include prefix), which could cause fewer keys to be returned when byte limit is reached
+	// Read BOTH source and restored data via database transactions to ensure consistent
+	// key ranges regardless of shard boundaries. Using the local SS for source reads
+	// can miss keys at shard boundaries after a bulkload restore.
+	state ErrorOr<GetKeyValuesReply> sourceResult;
 	state ErrorOr<GetKeyValuesReply> restoredResult;
 	try {
 		state Transaction tr(data->cx);
 		tr.setVersion(version);
-		tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
-		tr.setOption(FDBTransactionOptions::LOCK_AWARE);
-		GetRangeLimits limits(limit, limitBytes);
-		state RangeResult restoredData = wait(tr.getRange(restoredRange, limits, Snapshot::False, Reverse::False));
+		tr.setOption(FDBTransactionOptions::READ_LOCK_AWARE);
+		GetRangeLimits sourceLimits(limit, limitBytes);
+		state RangeResult sourceData = wait(tr.getRange(rangeToRead, sourceLimits, Snapshot::False, Reverse::False));
 
-		// Convert RangeResult to GetKeyValuesReply format
+		// Convert source to GetKeyValuesReply format
+		GetKeyValuesReply sourceReply;
+		sourceReply.data.append_deep(sourceReply.arena, sourceData.begin(), sourceData.size());
+		sourceReply.more = sourceData.more;
+		sourceReply.version = version;
+		sourceResult = sourceReply;
+
+		// Read restored data with the same limits as source to ensure comparable results
+		tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+		GetRangeLimits restoredLimits(limit, limitBytes);
+		state RangeResult restoredData = wait(tr.getRange(restoredRange, restoredLimits, Snapshot::False, Reverse::False));
+
+		// Convert restored to GetKeyValuesReply format
 		GetKeyValuesReply restoredReply;
 		restoredReply.data.append_deep(restoredReply.arena, restoredData.begin(), restoredData.size());
 		restoredReply.more = restoredData.more;
 		restoredReply.version = version;
 		restoredResult = restoredReply;
 	} catch (Error& e) {
-		restoredResult = e;
+		if (sourceResult.isError() || !sourceResult.present()) {
+			sourceResult = e;
+		} else {
+			restoredResult = e;
+		}
 	}
-
-	state Future<ErrorOr<GetKeyValuesReply>> restoredFuture = Future<ErrorOr<GetKeyValuesReply>>(restoredResult);
-
-	wait(success(sourceFuture) && success(restoredFuture));
 
 	// Check for errors
-	if (sourceFuture.get().isError()) {
-		throw sourceFuture.get().getError();
+	if (sourceResult.isError()) {
+		throw sourceResult.getError();
 	}
-	if (restoredFuture.get().isError()) {
-		throw restoredFuture.get().getError();
+	if (sourceResult.get().error.present()) {
+		throw sourceResult.get().error.get();
 	}
-	if (sourceFuture.get().get().error.present()) {
-		throw sourceFuture.get().get().error.get();
+	if (restoredResult.isError()) {
+		throw restoredResult.getError();
 	}
-	if (restoredFuture.get().get().error.present()) {
-		throw restoredFuture.get().get().error.get();
+	if (restoredResult.get().error.present()) {
+		throw restoredResult.get().error.get();
 	}
 
 	// Log what we fetched
 	TraceEvent("SSAuditRestoreFetchResult", data->thisServerID)
-	    .detail("SourceKeys", sourceFuture.get().get().data.size())
-	    .detail("RestoredKeys", restoredFuture.get().get().data.size())
-	    .detail("SourceBytes", sourceFuture.get().get().data.expectedSize())
-	    .detail("RestoredBytes", restoredFuture.get().get().data.expectedSize())
-	    .detail("SourceMore", sourceFuture.get().get().more)
-	    .detail("RestoredMore", restoredFuture.get().get().more);
+	    .detail("SourceKeys", sourceResult.get().data.size())
+	    .detail("RestoredKeys", restoredResult.get().data.size())
+	    .detail("SourceBytes", sourceResult.get().data.expectedSize())
+	    .detail("RestoredBytes", restoredResult.get().data.expectedSize())
+	    .detail("SourceMore", sourceResult.get().more)
+	    .detail("RestoredMore", restoredResult.get().more);
 
-	return std::make_pair(sourceFuture.get().get(), restoredFuture.get().get());
+	return std::make_pair(sourceResult.get(), restoredResult.get());
 }
 
 // Helper: Compare source and restored data, returning validation errors
@@ -4516,11 +4523,13 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 	state KeyRange rangeToRead = req.range;
 	state Key rangeToReadBegin = req.range.begin;
 	state KeyRange claimRange;
-	state int limit = 1e4;
+	state int limit = SERVER_KNOBS->AUDIT_RESTORE_BATCH_KEY_LIMIT; // Use knob instead of hardcoded 10K
 	state int limitBytes = CLIENT_KNOBS->REPLY_BYTE_LIMIT;
 	state int64_t readBytes = 0;
+	state Error nonRetryableError;
 	state int64_t numValidatedKeys = 0;
 	state int64_t validatedBytes = 0;
+	state int64_t lastPersistBytes = 0; // Track when we last persisted progress
 	state bool complete = false;
 	state double startTime = now();
 	state Reference<IRateControl> rateLimiter =
@@ -4554,6 +4563,53 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 				readBytes = sourceReply.data.expectedSize() + restoredReply.data.expectedSize();
 				validatedBytes += readBytes;
 
+				// FAST-PATH: Detect completely empty sides early and fail immediately.
+				// This prevents iterating through millions of keys when one side is empty.
+
+				// Case 1: Baseline (restored) is completely empty but source has data
+				// This catches the case where mode=BOTH backup created empty range files.
+				if (numValidatedKeys == 0 && restoredReply.data.empty() && !restoredReply.more &&
+				    !sourceReply.data.empty()) {
+					std::string error = format(
+					    "Baseline restore data is completely empty but source has %d keys! "
+					    "This likely means the backup's range file snapshot was empty (mode=BOTH bug). "
+					    "First source key: %s",
+					    sourceReply.data.size(),
+					    sourceReply.data.size() > 0
+					        ? Traceable<StringRef>::toString(sourceReply.data[0].key).c_str()
+					        : "N/A");
+					TraceEvent(SevError, "SSAuditRestoreEmptyBaseline", data->thisServerID)
+					    .detail("AuditID", req.id)
+					    .detail("AuditRange", req.range)
+					    .detail("SourceKeyCount", sourceReply.data.size())
+					    .detail("RestoredKeyCount", restoredReply.data.size())
+					    .detail("ErrorMessage", error);
+					errors.push_back(error);
+					break; // Exit loop immediately
+				}
+
+				// Case 2: Source (bulkload restore) is completely empty but baseline has data
+				// This catches the case where bulkload restore failed but baseline worked.
+				if (numValidatedKeys == 0 && sourceReply.data.empty() && !sourceReply.more &&
+				    !restoredReply.data.empty()) {
+					std::string error = format(
+					    "Bulkload restore data is completely empty but baseline has %d keys! "
+					    "This likely means the bulkload restore failed. "
+					    "First baseline key: %s",
+					    restoredReply.data.size(),
+					    restoredReply.data.size() > 0
+					        ? Traceable<StringRef>::toString(restoredReply.data[0].key).c_str()
+					        : "N/A");
+					TraceEvent(SevError, "SSAuditRestoreEmptySource", data->thisServerID)
+					    .detail("AuditID", req.id)
+					    .detail("AuditRange", req.range)
+					    .detail("SourceKeyCount", sourceReply.data.size())
+					    .detail("RestoredKeyCount", restoredReply.data.size())
+					    .detail("ErrorMessage", error);
+					errors.push_back(error);
+					break; // Exit loop immediately
+				}
+
 				// Check if we've completed reading
 				if (!sourceReply.more) {
 					complete = true;
@@ -4573,15 +4629,19 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 				                                      lastKey,
 				                                      numValidatedKeys);
 
-				// Update progress in the database
+				// Update progress in the database (only persist periodically to reduce transaction overhead)
 				KeyRange completeRange = Standalone(KeyRangeRef(rangeToRead.begin, keyAfter(lastKey)));
-				if (!complete && !completeRange.empty() && claimRange.begin == completeRange.begin) {
+				bool shouldPersist = (validatedBytes - lastPersistBytes) >=
+				                     SERVER_KNOBS->AUDIT_PROGRESS_PERSIST_BYTES_INTERVAL;
+				if (!complete && shouldPersist && !completeRange.empty() &&
+				    claimRange.begin == completeRange.begin) {
 					claimRange = claimRange & completeRange;
 					AuditStorageState progressState(req.id, claimRange, req.getType());
 					progressState.setPhase(AuditPhase::Running);
 					progressState.ddId = req.ddId;
 					progressState.auditServerId = data->thisServerID;
 					wait(persistAuditStateByRange(data->cx, progressState));
+					lastPersistBytes = validatedBytes;
 				}
 
 				// Apply rate limiting
@@ -4599,11 +4659,25 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 					break;
 				}
 
-			} catch (Error& e) {
+		} catch (Error& e) {
 				if (e.code() == error_code_actor_cancelled) {
 					throw e;
 				}
-				throw;
+				nonRetryableError = e;
+				// Transient errors — the SS serving restored data may be overloaded
+				// or not caught up yet after a restore. Retry with a fresh version.
+				if (nonRetryableError.code() == error_code_future_version ||
+				    nonRetryableError.code() == error_code_transaction_too_old ||
+				    nonRetryableError.code() == error_code_server_overloaded) {
+					TraceEvent(SevWarn, "SSAuditRestoreRetryableError", data->thisServerID)
+					    .detail("AuditID", req.id)
+					    .detail("Error", nonRetryableError.what())
+					    .detail("Version", version)
+					    .detail("Range", rangeToRead);
+					wait(delay(1.0));
+					continue;
+				}
+				throw nonRetryableError;
 			}
 		}
 

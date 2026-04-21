@@ -1149,6 +1149,12 @@ public:
 				continue;
 			}
 
+			// Skip BulkDump snapshots (totalSize=0) when doing rangefile restore - they have no range files.
+			// BulkDump snapshots are used only for bulkload restore which uses a separate code path.
+			if (snapshots[i].totalSize == 0) {
+				continue;
+			}
+
 			RestorableFileSet restorable;
 			Version minKeyRangeVersion = MAX_VERSION;
 			Version maxKeyRangeVersion = -1;
