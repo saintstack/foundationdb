@@ -4306,7 +4306,8 @@ ACTOR static Future<std::pair<GetKeyValuesReply, GetKeyValuesReply>> fetchSource
 		// Read restored data with the same limits as source to ensure comparable results
 		tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 		GetRangeLimits restoredLimits(limit, limitBytes);
-		state RangeResult restoredData = wait(tr.getRange(restoredRange, restoredLimits, Snapshot::False, Reverse::False));
+		state RangeResult restoredData =
+		    wait(tr.getRange(restoredRange, restoredLimits, Snapshot::False, Reverse::False));
 
 		// Convert restored to GetKeyValuesReply format
 		GetKeyValuesReply restoredReply;
@@ -4575,9 +4576,8 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 					    "This likely means the backup's range file snapshot was empty (mode=BOTH bug). "
 					    "First source key: %s",
 					    sourceReply.data.size(),
-					    sourceReply.data.size() > 0
-					        ? Traceable<StringRef>::toString(sourceReply.data[0].key).c_str()
-					        : "N/A");
+					    sourceReply.data.size() > 0 ? Traceable<StringRef>::toString(sourceReply.data[0].key).c_str()
+					                                : "N/A");
 					TraceEvent(SevError, "SSAuditRestoreEmptyBaseline", data->thisServerID)
 					    .detail("AuditID", req.id)
 					    .detail("AuditRange", req.range)
@@ -4592,14 +4592,13 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 				// This catches the case where bulkload restore failed but baseline worked.
 				if (numValidatedKeys == 0 && sourceReply.data.empty() && !sourceReply.more &&
 				    !restoredReply.data.empty()) {
-					std::string error = format(
-					    "Bulkload restore data is completely empty but baseline has %d keys! "
-					    "This likely means the bulkload restore failed. "
-					    "First baseline key: %s",
-					    restoredReply.data.size(),
-					    restoredReply.data.size() > 0
-					        ? Traceable<StringRef>::toString(restoredReply.data[0].key).c_str()
-					        : "N/A");
+					std::string error = format("Bulkload restore data is completely empty but baseline has %d keys! "
+					                           "This likely means the bulkload restore failed. "
+					                           "First baseline key: %s",
+					                           restoredReply.data.size(),
+					                           restoredReply.data.size() > 0
+					                               ? Traceable<StringRef>::toString(restoredReply.data[0].key).c_str()
+					                               : "N/A");
 					TraceEvent(SevError, "SSAuditRestoreEmptySource", data->thisServerID)
 					    .detail("AuditID", req.id)
 					    .detail("AuditRange", req.range)
@@ -4631,10 +4630,9 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 
 				// Update progress in the database (only persist periodically to reduce transaction overhead)
 				KeyRange completeRange = Standalone(KeyRangeRef(rangeToRead.begin, keyAfter(lastKey)));
-				bool shouldPersist = (validatedBytes - lastPersistBytes) >=
-				                     SERVER_KNOBS->AUDIT_PROGRESS_PERSIST_BYTES_INTERVAL;
-				if (!complete && shouldPersist && !completeRange.empty() &&
-				    claimRange.begin == completeRange.begin) {
+				bool shouldPersist =
+				    (validatedBytes - lastPersistBytes) >= SERVER_KNOBS->AUDIT_PROGRESS_PERSIST_BYTES_INTERVAL;
+				if (!complete && shouldPersist && !completeRange.empty() && claimRange.begin == completeRange.begin) {
 					claimRange = claimRange & completeRange;
 					AuditStorageState progressState(req.id, claimRange, req.getType());
 					progressState.setPhase(AuditPhase::Running);
@@ -4659,7 +4657,7 @@ ACTOR Future<Void> auditRestoreQ(StorageServer* data, AuditStorageRequest req) {
 					break;
 				}
 
-		} catch (Error& e) {
+			} catch (Error& e) {
 				if (e.code() == error_code_actor_cancelled) {
 					throw e;
 				}

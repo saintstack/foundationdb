@@ -543,8 +543,9 @@ using RestoreFile = RestoreConfig::RestoreFile;
 //   - Submitted: task created, waiting to be picked up by DD
 //   - Triggered: assigned to storage server, waiting to start
 //   - Running: storage server actively downloading/ingesting SST files
-Future<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>>
-getBulkLoadTaskProgress(Database cx, UID jobId, bool lockAware) {
+Future<std::tuple<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t>> getBulkLoadTaskProgress(Database cx,
+                                                                                                 UID jobId,
+                                                                                                 bool lockAware) {
 	Reference<ReadYourWritesTransaction> tr(new ReadYourWritesTransaction(cx));
 	Key readBegin = normalKeys.begin;
 	Key readEnd = normalKeys.end;
@@ -600,8 +601,7 @@ getBulkLoadTaskProgress(Database cx, UID jobId, bool lockAware) {
 			co_await tr->onError(err);
 		}
 	}
-	co_return std::make_tuple(
-	    completedTasks, submittedTasks, triggeredTasks, runningTasks, totalTasks, completedBytes);
+	co_return std::make_tuple(completedTasks, submittedTasks, triggeredTasks, runningTasks, totalTasks, completedBytes);
 }
 
 // Monitor BulkLoad job completion and update restore progress counters
@@ -3073,8 +3073,7 @@ struct BackupSnapshotDispatchTask : BackupTaskFuncBase {
 		// snapshot dispatch task. In either case, the task should wait for snapshotBatchFuture. The snapshot done
 		// key, passed to the current task, is also passed on.
 		if (snapshotFinished) {
-			TraceEvent("FileBackupSnapshotDispatchAddingManifestTask")
-			    .detail("BackupUID", config.getUid());
+			TraceEvent("FileBackupSnapshotDispatchAddingManifestTask").detail("BackupUID", config.getUid());
 			co_await addSnapshotManifestTask(
 			    tr, taskBucket, task, TaskCompletionKey::signal(snapshotFinishedFuture), snapshotBatchFuture);
 		} else {

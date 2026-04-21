@@ -975,8 +975,8 @@ public:
 				               logVersion.get() > bulkDumpSnapshot.get().get()) {
 					           return std::max(logVersion.get() - 1, bulkDumpSnapshot.get().get());
 				           }
-				           if (logVersion.present() && incrementalBackup.isReady() && incrementalBackup.get().present() &&
-				               incrementalBackup.get().get()) {
+				           if (logVersion.present() && incrementalBackup.isReady() &&
+				               incrementalBackup.get().present() && incrementalBackup.get().get()) {
 					           return logVersion.get() - 1;
 				           }
 				           return {};
