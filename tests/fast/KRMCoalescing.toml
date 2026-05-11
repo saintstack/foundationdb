@@ -1,0 +1,6 @@
+[[test]]
+testTitle = 'KRMCoalescingCorrectness'
+useDB = true
+
+    [[test.workload]]
+    testName = 'KRMCoalescingCorrectness'
