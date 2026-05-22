@@ -2396,34 +2396,59 @@ static Future<Void> finishMoveShards(Database occ,
 
 					if (range.end == dataMove.ranges.front().end) {
 						if (bulkLoadTaskState.present()) {
-							BulkLoadTaskState newBulkLoadTaskState;
-							try {
-								newBulkLoadTaskState =
-								    co_await getBulkLoadTask(&tr,
-								                             bulkLoadTaskState.get().getRange(),
-								                             bulkLoadTaskState.get().getTaskId(),
-								                             { BulkLoadPhase::Running, BulkLoadPhase::Complete });
-								newBulkLoadTaskState.phase = BulkLoadPhase::Complete;
-							} catch (Error& e) {
-								if (e.code() == error_code_bulkload_task_outdated) {
+							// Set the bulkload task to Complete phase in a separate transaction.
+							// At large scale (10B+ records), the main finishMoveShards transaction
+							// can hit transaction_too_old due to waitForShardReady consuming most of
+							// the 5-second read version window. By splitting the task phase update
+							// into its own transaction, we avoid coupling its success to the main
+							// shard assignment transaction's timing.
+							Transaction taskTr(occ);
+							int taskRetries = 0;
+							while (true) {
+								Error err;
+								try {
+									taskTr.setOption(FDBTransactionOptions::LOCK_AWARE);
+									taskTr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+									BulkLoadTaskState newBulkLoadTaskState =
+									    co_await getBulkLoadTask(&taskTr,
+									                             bulkLoadTaskState.get().getRange(),
+									                             bulkLoadTaskState.get().getTaskId(),
+									                             { BulkLoadPhase::Running, BulkLoadPhase::Complete });
+									if (newBulkLoadTaskState.phase == BulkLoadPhase::Complete) {
+										break; // Already completed by a previous attempt
+									}
+									newBulkLoadTaskState.phase = BulkLoadPhase::Complete;
+									ASSERT(newBulkLoadTaskState.getDataMoveId().present() &&
+									       newBulkLoadTaskState.getDataMoveId().get() == dataMoveId);
+									newBulkLoadTaskState.completeTime = now();
+									co_await krmSetRange(&taskTr,
+									                     bulkLoadTaskPrefix,
+									                     newBulkLoadTaskState.getRange(),
+									                     bulkLoadTaskStateValue(newBulkLoadTaskState));
+									co_await taskTr.commit();
+									TraceEvent(bulkLoadVerboseEventSev(),
+									           "DDBulkLoadTaskSetCompleteTransaction",
+									           relocationIntervalId)
+									    .detail("DataMoveID", dataMoveId)
+									    .detail("JobID", newBulkLoadTaskState.getJobId())
+									    .detail("TaskID", newBulkLoadTaskState.getTaskId());
+									dataMove.bulkLoadTaskState = newBulkLoadTaskState;
+									break;
+								} catch (Error& e) {
+									err = e;
+								}
+								if (err.code() == error_code_bulkload_task_outdated) {
 									cancelDataMove = true;
 									throw retry();
 								}
-								throw e;
+								if (err.code() == error_code_actor_cancelled) {
+									throw err;
+								}
+								if (++taskRetries > 30) {
+									throw err;
+								}
+								co_await taskTr.onError(err);
 							}
-							ASSERT(newBulkLoadTaskState.getDataMoveId().present() &&
-							       newBulkLoadTaskState.getDataMoveId().get() == dataMoveId);
-							newBulkLoadTaskState.completeTime = now();
-							co_await krmSetRange(&tr,
-							                     bulkLoadTaskPrefix,
-							                     newBulkLoadTaskState.getRange(),
-							                     bulkLoadTaskStateValue(newBulkLoadTaskState));
-							TraceEvent(
-							    bulkLoadVerboseEventSev(), "DDBulkLoadTaskSetCompleteTransaction", relocationIntervalId)
-							    .detail("DataMoveID", dataMoveId)
-							    .detail("JobID", newBulkLoadTaskState.getJobId())
-							    .detail("TaskID", newBulkLoadTaskState.getTaskId());
-							dataMove.bulkLoadTaskState = newBulkLoadTaskState;
 						}
 						co_await deleteCheckpoints(&tr, dataMove.checkpoints, dataMoveId);
 						tr.clear(dataMoveKeyFor(dataMoveId));

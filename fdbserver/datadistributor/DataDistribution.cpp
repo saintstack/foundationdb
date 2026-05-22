@@ -1210,7 +1210,11 @@ Future<Void> doBulkLoadTask(Reference<DataDistributor> self, KeyRange range, UID
 		// The completion of the task relies on the fact that a data move on a range is either
 		// completed by itself or replaced by a data move on the overlapping range
 		self->triggerShardBulkLoading.send(BulkLoadShardRequest(triggeredBulkLoadTask));
-		BulkLoadAck ack = co_await completeAck.getFuture(); // proceed when a data move completes with this task
+		// Timeout prevents permanent hang when data moves are abandoned during DD
+		// reinitialization or persistent transaction_too_old in finishMoveShards.
+		// On timeout, this actor exits and scheduleBulkLoadTasks will re-trigger the task.
+		BulkLoadAck ack = co_await timeoutError(completeAck.getFuture(),
+		                                        SERVER_KNOBS->DD_BULKLOAD_JOB_MONITOR_PERIOD_SEC * 10);
 		if (ack.unretryableError) {
 			TraceEvent(SevWarnAlways, "DDBulkLoadTaskDoTask", self->ddId)
 			    .detail("Phase", "See unretryable error")
@@ -2024,11 +2028,13 @@ Future<bool> checkBulkLoadTaskCompleteOrError(Reference<DataDistributor> self) {
 				break;
 			}
 			for (int i = 0; i < static_cast<int>(bulkLoadTaskResult.size()) - 1; i++) {
-				ASSERT(!bulkLoadTaskResult[i].value.empty());
+				if (bulkLoadTaskResult[i].value.empty()) {
+					continue;
+				}
 				existTask = decodeBulkLoadTaskState(bulkLoadTaskResult[i].value);
 				if (!existTask.isValid()) {
-					// At this time, the task metadata must be existing since no one acknowledges this task.
-					co_return false;
+					// Task has been acknowledged and cleared by eraseBulkLoadTask — treat as complete.
+					continue;
 				}
 				// When start loading a job, the old job metadata must be cleared at first.
 				// So, any existing bulkload job id must match the running job id.
@@ -2048,7 +2054,8 @@ Future<bool> checkBulkLoadTaskCompleteOrError(Reference<DataDistributor> self) {
 					    .detail("InputJobID", jobState.getJobId());
 					continue;
 				}
-				if (existTask.phase != BulkLoadPhase::Complete) {
+				if (existTask.phase != BulkLoadPhase::Complete &&
+				    existTask.phase != BulkLoadPhase::Acknowledged) {
 					TraceEvent(SevDebug, "DDBulkLoadJobManageFindRunningTask", self->ddId)
 					    .detail("TaskJobID", existTask.getJobId())
 					    .detail("TaskID", existTask.getTaskId())

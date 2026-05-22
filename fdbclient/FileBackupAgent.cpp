@@ -6203,7 +6203,10 @@ struct RestoreDispatchTaskFunc : RestoreTaskFuncBase {
 		int64_t batchSize = Params.batchSize().get(task);
 
 		// If starting a new batch and the apply lag is too large then re-queue and wait
-		if (!addingToExistingBatch && applyLag > (BUGGIFY ? 1 : CLIENT_KNOBS->CORE_VERSIONSPERSECOND * 300)) {
+		// 900s threshold keeps the dispatch pipeline full at large scale (10B+ records)
+		// without overwhelming system keyspace. Previous 300s was too conservative and
+		// caused the dispatcher to stall frequently during rangefile restore.
+		if (!addingToExistingBatch && applyLag > (BUGGIFY ? 1 : CLIENT_KNOBS->CORE_VERSIONSPERSECOND * 900)) {
 			// Wait a small amount of time and then re-add this same task.
 			co_await delay(FLOW_KNOBS->PREVENT_FAST_SPIN_DELAY);
 			co_await RestoreDispatchTaskFunc::addTask(
