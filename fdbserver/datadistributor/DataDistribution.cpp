@@ -1213,8 +1213,8 @@ Future<Void> doBulkLoadTask(Reference<DataDistributor> self, KeyRange range, UID
 		// Timeout prevents permanent hang when data moves are abandoned during DD
 		// reinitialization or persistent transaction_too_old in finishMoveShards.
 		// On timeout, this actor exits and scheduleBulkLoadTasks will re-trigger the task.
-		BulkLoadAck ack = co_await timeoutError(completeAck.getFuture(),
-		                                        SERVER_KNOBS->DD_BULKLOAD_JOB_MONITOR_PERIOD_SEC * 10);
+		BulkLoadAck ack =
+		    co_await timeoutError(completeAck.getFuture(), SERVER_KNOBS->DD_BULKLOAD_JOB_MONITOR_PERIOD_SEC * 10);
 		if (ack.unretryableError) {
 			TraceEvent(SevWarnAlways, "DDBulkLoadTaskDoTask", self->ddId)
 			    .detail("Phase", "See unretryable error")
@@ -2054,8 +2054,7 @@ Future<bool> checkBulkLoadTaskCompleteOrError(Reference<DataDistributor> self) {
 					    .detail("InputJobID", jobState.getJobId());
 					continue;
 				}
-				if (existTask.phase != BulkLoadPhase::Complete &&
-				    existTask.phase != BulkLoadPhase::Acknowledged) {
+				if (existTask.phase != BulkLoadPhase::Complete && existTask.phase != BulkLoadPhase::Acknowledged) {
 					TraceEvent(SevDebug, "DDBulkLoadJobManageFindRunningTask", self->ddId)
 					    .detail("TaskJobID", existTask.getJobId())
 					    .detail("TaskID", existTask.getTaskId())
