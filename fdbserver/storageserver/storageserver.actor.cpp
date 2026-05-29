@@ -1217,6 +1217,7 @@ public:
 
 	FlowLock durableVersionLock;
 	FlowLock fetchKeysParallelismLock;
+	FlowLock getShardStateConcurrencyLock; // Limits concurrent getShardState processing (BUGGIFY)
 	int64_t fetchKeysBytesBudget;
 	AsyncVar<bool> fetchKeysBudgetUsed;
 	int64_t fetchKeysTotalCommitBytes;
@@ -1474,6 +1475,9 @@ public:
 	    trackShardAssignmentMinVersion(invalidVersion), byteSampleClears(false, "\xff\xff\xff"_sr),
 	    durableInProgress(Void()), watchBytes(0), numWatches(0), noRecentUpdates(false), lastUpdate(now()),
 	    updateEagerReads(nullptr), fetchKeysParallelismLock(SERVER_KNOBS->FETCH_KEYS_PARALLELISM),
+	    getShardStateConcurrencyLock(SERVER_KNOBS->BUGGIFY_GET_SHARD_STATE_DELAY > 0
+	                                     ? (int)SERVER_KNOBS->BUGGIFY_GET_SHARD_STATE_DELAY
+	                                     : 1000),
 	    fetchKeysBytesBudget(SERVER_KNOBS->STORAGE_FETCH_BYTES), fetchKeysBudgetUsed(false),
 	    fetchKeysTotalCommitBytes(0), fetchKeysLimiter(SERVER_KNOBS->STORAGE_FETCH_KEYS_RATE_LIMIT),
 	    serveFetchCheckpointParallelismLock(SERVER_KNOBS->SERVE_FETCH_CHECKPOINT_PARALLELISM),
@@ -2676,6 +2680,32 @@ size_t WATCH_OVERHEAD_WATCHIMPL = 0;
 
 Future<Void> getShardState_impl(StorageServer* data, GetShardStateRequest req) {
 	ASSERT(req.mode != GetShardStateRequest::NO_WAIT);
+
+	// Simulate CPU saturation on dest SS (p127/p102 pattern).
+	// Limits concurrent getShardState processing to N (set by BUGGIFY_GET_SHARD_STATE_DELAY knob).
+	// When knob=2: only 2 getShardState requests processed at a time per SS.
+	// Additional requests queue up in the FlowLock, simulating CPU contention.
+	//
+	// Once the lock is acquired, processing is slowed proportional to queue depth.
+	// This models real CPU contention: the more work queued, the slower each
+	// operation runs (cache thrashing, context switching, disk contention).
+	//
+	// Self-reinforcing: more retries → longer queue → slower processing →
+	// longer total wait → transaction exceeds 5s → timeout → more retries.
+	//
+	// Only activates when fetchKeys is active (SS is a move destination).
+	FlowLock::Releaser concurrencyHolder;
+	if (SERVER_KNOBS->BUGGIFY_GET_SHARD_STATE_DELAY > 0 &&
+	    data->fetchKeysParallelismLock.activePermits() > 0) {
+		co_await data->getShardStateConcurrencyLock.take();
+		concurrencyHolder = FlowLock::Releaser(data->getShardStateConcurrencyLock);
+		// Processing slows under pressure: each waiter adds 0.5s of processing time.
+		// With 5 waiters: 2.5s processing + queue wait = easily exceeds 5s txn budget.
+		int waiters = data->getShardStateConcurrencyLock.waiters();
+		if (waiters > 0) {
+			co_await delay(0.5 * waiters);
+		}
+	}
 
 	while (true) {
 		std::vector<Future<Void>> onChange;
