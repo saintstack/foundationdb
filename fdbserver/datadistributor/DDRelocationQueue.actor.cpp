@@ -1089,7 +1089,12 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 		// queue
 		// FIXME: we need spare capacity even when we're just going to be cancelling work via TEAM_HEALTHY
 		if (!rd.isRestore() && !canLaunchSrc(rd, teamSize, singleRegionTeamSize, busymap, cancellableRelocations)) {
-			// logRelocation( rd, "SkippingQueuedRelocation" );
+			TraceEvent(SevInfo, "DDLaunchSkippedBusySrc")
+			    .suppressFor(5.0)
+			    .detail("DataMoveID", rd.dataMoveId)
+			    .detail("Priority", rd.priority)
+			    .detail("SrcSize", rd.src.size())
+			    .detail("ActiveRelocations", activeRelocations);
 			if (rd.bulkLoadTask.present()) {
 				TraceEvent(SevError, "DDBulkLoadTaskDelayedByBusySrc", this->distributorId)
 				    .detail("TaskID", rd.bulkLoadTask.get().coreState.getTaskId())
@@ -1206,12 +1211,12 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 	if (now() - startTime > .001 && deterministicRandom()->random01() < 0.001)
 		TraceEvent(SevWarnAlways, "LaunchingQueueSlowx1000").detail("Elapsed", now() - startTime);
 
-	/*if( startedHere > 0 ) {
-	    TraceEvent("StartedDDRelocators", distributorId)
-	        .detail("QueueSize", queuedRelocations)
-	        .detail("StartedHere", startedHere)
-	        .detail("ActiveRelocations", activeRelocations);
-	} */
+	TraceEvent(SevInfo, "DDLaunchQueuedWorkSummary")
+	    .suppressFor(5.0)
+	    .detail("StartedHere", startedHere)
+	    .detail("QueueSize", queuedRelocations)
+	    .detail("ActiveRelocations", activeRelocations)
+	    .detail("CombinedSize", combined.size());
 
 	validate();
 }
@@ -2822,16 +2827,22 @@ struct DDQueueImpl {
 					}
 					when(RelocateData done = waitNext(self->dataTransferComplete.getFuture())) {
 						complete(done, self->busymap, self->destBusymap);
+						TraceEvent(SevInfo, "DDDataTransferCompleteFreedBusyness")
+						    .suppressFor(5.0)
+						    .detail("DataMoveID", done.dataMoveId)
+						    .detail("ActiveRelocations", self->activeRelocations)
+						    .detail("SrcServers", done.src.size())
+						    .detail("ServersToLaunchFromSize", serversToLaunchFrom.size());
 						if (serversToLaunchFrom.empty() && !done.src.empty())
 							launchQueuedWorkTimeout = delay(0, TaskPriority::DataDistributionLaunch);
 						serversToLaunchFrom.insert(done.src.begin(), done.src.end());
 					}
 					when(RelocateData done = waitNext(self->relocationComplete.getFuture())) {
 						self->activeRelocations--;
-						TraceEvent(SevVerbose, "InFlightRelocationChange")
-						    .detail("Complete", done.dataMoveId)
-						    .detail("IsRestore", done.isRestore())
-						    .detail("Total", self->activeRelocations);
+						TraceEvent(SevInfo, "DDRelocationCompleteDecrement")
+						    .suppressFor(5.0)
+						    .detail("DataMoveID", done.dataMoveId)
+						    .detail("ActiveRelocations", self->activeRelocations);
 						self->finishRelocation(done.priority, done.healthPriority);
 						self->fetchKeysComplete.erase(done);
 						// self->logRelocation( done, "ShardRelocatorDone" );

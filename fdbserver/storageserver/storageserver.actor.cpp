@@ -1219,6 +1219,10 @@ public:
 	int64_t fetchKeysTotalCommitBytes;
 	std::vector<Promise<FetchInjectionInfo*>> readyFetchKeys;
 
+	// Tracks concurrent GetShardState requests on this SS for load-dependent
+	// version lag injection (p127/p102 reproduction).
+	std::atomic<int> concurrentGetShardStateRequests{0};
+
 	ThroughputLimiter fetchKeysLimiter;
 
 	FlowLock serveFetchCheckpointParallelismLock;
@@ -2682,6 +2686,14 @@ size_t WATCH_OVERHEAD_WATCHIMPL = 0;
 Future<Void> getShardState_impl(StorageServer* data, GetShardStateRequest req) {
 	ASSERT(req.mode != GetShardStateRequest::NO_WAIT);
 
+	// Track concurrent requests for load-dependent version lag.
+	// Use a scope guard to ensure decrement on any exit (including cancellation).
+	bool tracked = SERVER_KNOBS->FINISH_MOVE_KEYS_DELAY > 0;
+	if (tracked) {
+		data->concurrentGetShardStateRequests++;
+	}
+	try {
+
 	while (true) {
 		std::vector<Future<Void>> onChange;
 
@@ -2711,6 +2723,26 @@ Future<Void> getShardState_impl(StorageServer* data, GetShardStateRequest req) {
 		}
 
 		if (!onChange.size()) {
+			// Load-dependent version lag: reproduces p127/p102 feedback loop.
+			// versionLag = knob * 1e6 * concurrentRequests on this SS.
+			// More retries → more concurrent requests → larger lag → more polling →
+			// longer transactions → more failures → more retries. Self-sustaining.
+			if (SERVER_KNOBS->FINISH_MOVE_KEYS_DELAY > 0) {
+				int concurrent = data->concurrentGetShardStateRequests.load();
+				Version versionLag = (Version)(SERVER_KNOBS->FINISH_MOVE_KEYS_DELAY * 1e6 * concurrent);
+				Version reportedVersion = std::max((Version)0, data->version.get() - versionLag);
+				GetShardStateReply rep(reportedVersion, data->durableVersion.get());
+				if (req.includePhysicalShard) {
+					rep.shards = data->getStorageServerShards(req.keys);
+				}
+				data->concurrentGetShardStateRequests--;
+				req.reply.send(rep);
+				co_return;
+			}
+
+			if (tracked) {
+				data->concurrentGetShardStateRequests--;
+			}
 			GetShardStateReply rep(data->version.get(), data->durableVersion.get());
 			if (req.includePhysicalShard) {
 				rep.shards = data->getStorageServerShards(req.keys);
@@ -2721,6 +2753,12 @@ Future<Void> getShardState_impl(StorageServer* data, GetShardStateRequest req) {
 
 		co_await waitForAll(onChange);
 		co_await delay(0); // onChange could have been triggered by cancellation, let things settle before rechecking
+	}
+	} catch (Error& e) {
+		if (tracked) {
+			data->concurrentGetShardStateRequests--;
+		}
+		throw;
 	}
 }
 
@@ -9886,6 +9924,26 @@ Future<Void> update(StorageServer* data, bool* pReceivedUpdate) {
 
 				data->noRecentUpdates.set(false);
 				data->lastUpdate = now();
+
+				// Inject version advancement delay with FEEDBACK LOOP.
+				// Models p102/p127: SS busy → version lags → retries hit SS →
+				// SS busier → lags more → cascade.
+				//
+				// Delay = knob × concurrentGetShardStateRequests
+				// - Only fires when fetchKeys is active (SS is a move destination)
+				// - Scales with concurrent getShardState requests (from retries)
+				// - More retries → higher delay → more lag → more retries (feedback)
+				//
+				// In p102: retries → more CPU consumed by GetShardState → less CPU
+				// for mutation processing → version falls behind. Here: retries →
+				// higher concurrent count → longer delay → version falls behind.
+				if (SERVER_KNOBS->FETCH_KEYS_CPU_CONTENTION > 0 &&
+				    data->fetchKeysParallelismLock.activePermits() > 0) {
+					int concurrent = data->concurrentGetShardStateRequests.load();
+					if (concurrent > 2) {
+						co_await delay(SERVER_KNOBS->FETCH_KEYS_CPU_CONTENTION * concurrent);
+					}
+				}
 
 				data->prevVersion = data->version.get();
 				data->version.set(ver); // Triggers replies to waiting gets for new version(s)

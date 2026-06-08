@@ -909,6 +909,8 @@ public:
 
 	// Move Keys
 	double SHARD_READY_DELAY;
+	double FINISH_MOVE_KEYS_DELAY; // Injected delay inside finishMoveKeys transaction for testing
+	double FETCH_KEYS_CPU_CONTENTION; // CPU spin (seconds) per version batch when fetchKeys active on SS
 	double SERVER_READY_QUORUM_INTERVAL;
 	double SERVER_READY_QUORUM_TIMEOUT;
 	double REMOVE_RETRY_DELAY;
