@@ -3,6 +3,20 @@ storageEngineExcludeTypes = ["ssd-sharded-rocksdb"] #FIXME: remove after allowin
 
 disableTss = true # TODO(BulkLoad): support TSS. finishMoveShard should wait for TSS if a data move is bulkload data move.
 
+# DD's bulk-load team selection rejects any team that shares a server with the source team
+# (DDTeamCollection.actor.cpp:266-282). On smaller machine counts with high replication
+# (e.g. three_data_hall, storage_replicas:=4) every candidate team overlaps with the source
+# and DD never finds a valid team -- the test then stalls on
+# DDBulkLoadEngineTaskGetTeamFailedToFindValidTeam. Pin enough machines for a disjoint team
+# to exist under any redundancy mode the sim picks. Matches PhysicalShardMove and
+# StorageServerCheckpointRestore which exercise similar bulk-load paths.
+machineCount = 15
+
+# This test validates bulk-dump mechanics, not multi-region DR. Forcing single-region
+# avoids the same DDBulkLoadEngineTaskGetTeamFailedToFindValidTeam stall when machineCount
+# gets split across regions and per-region team diversity drops below the disjoint threshold.
+generateFearless = false
+
 [[knobs]]
 # This knob is commented out since the knob override is done *after* the simulation system is set up. However,
 # this is not going to completely work:
