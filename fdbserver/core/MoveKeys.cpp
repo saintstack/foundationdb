@@ -2424,36 +2424,6 @@ static Future<Void> finishMoveShards(Database occ,
 					co_await waitForAll(actors);
 
 					if (range.end == dataMove.ranges.front().end) {
-						if (bulkLoadTaskState.present()) {
-							BulkLoadTaskState newBulkLoadTaskState;
-							try {
-								newBulkLoadTaskState =
-								    co_await getBulkLoadTask(&tr,
-								                             bulkLoadTaskState.get().getRange(),
-								                             bulkLoadTaskState.get().getTaskId(),
-								                             { BulkLoadPhase::Running, BulkLoadPhase::Complete });
-								newBulkLoadTaskState.phase = BulkLoadPhase::Complete;
-							} catch (Error& e) {
-								if (e.code() == error_code_bulkload_task_outdated) {
-									cancelDataMove = true;
-									throw retry();
-								}
-								throw e;
-							}
-							ASSERT(newBulkLoadTaskState.getDataMoveId().present() &&
-							       newBulkLoadTaskState.getDataMoveId().get() == dataMoveId);
-							newBulkLoadTaskState.completeTime = now();
-							co_await krmSetRange(&tr,
-							                     bulkLoadTaskPrefix,
-							                     newBulkLoadTaskState.getRange(),
-							                     bulkLoadTaskStateValue(newBulkLoadTaskState));
-							TraceEvent(
-							    bulkLoadVerboseEventSev(), "DDBulkLoadTaskSetCompleteTransaction", relocationIntervalId)
-							    .detail("DataMoveID", dataMoveId)
-							    .detail("JobID", newBulkLoadTaskState.getJobId())
-							    .detail("TaskID", newBulkLoadTaskState.getTaskId());
-							dataMove.bulkLoadTaskState = newBulkLoadTaskState;
-						}
 						co_await deleteCheckpoints(&tr, dataMove.checkpoints, dataMoveId);
 						tr.clear(dataMoveKeyFor(dataMoveId));
 						TraceEvent(sevDm, "FinishMoveShardsDeleteMetaData", relocationIntervalId)
@@ -2471,6 +2441,73 @@ static Future<Void> finishMoveShards(Database occ,
 
 					co_await tr.commit();
 					counters->committed->increment(1);
+
+					// After the outer commit succeeds, persist phase=Complete in a separate
+					// transaction. Outer-then-inner ordering ensures phase=Complete is never
+					// observable before shard reassignment is durable. If DD crashes between
+					// the outer commit here and the inner commit below, the task remains in
+					// Running with no dataMoveKey; scheduleBulkLoadTasks re-dispatches via
+					// doBulkLoadTask, which retriggers a fresh data move on a range whose
+					// data is already in place from this attempt -- the second attempt
+					// converges to a no-op shard reassignment plus the phase=Complete write.
+					//
+					// The phase update is split out to avoid coupling its success to the main
+					// shard assignment transaction's timing, which at large scale (10B+
+					// records) can hit transaction_too_old due to waitForShardReady consuming
+					// most of the 5-second read version window.
+					if (range.end == dataMove.ranges.front().end && bulkLoadTaskState.present()) {
+						Transaction taskTr(occ);
+						int taskRetries = 0;
+						while (true) {
+							Error err;
+							try {
+								taskTr.setOption(FDBTransactionOptions::LOCK_AWARE);
+								taskTr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+								BulkLoadTaskState newBulkLoadTaskState =
+								    co_await getBulkLoadTask(&taskTr,
+								                             bulkLoadTaskState.get().getRange(),
+								                             bulkLoadTaskState.get().getTaskId(),
+								                             { BulkLoadPhase::Running, BulkLoadPhase::Complete });
+								if (newBulkLoadTaskState.phase == BulkLoadPhase::Complete) {
+									break; // Already completed by a previous attempt
+								}
+								newBulkLoadTaskState.phase = BulkLoadPhase::Complete;
+								ASSERT(newBulkLoadTaskState.getDataMoveId().present() &&
+								       newBulkLoadTaskState.getDataMoveId().get() == dataMoveId);
+								newBulkLoadTaskState.completeTime = now();
+								co_await krmSetRange(&taskTr,
+								                     bulkLoadTaskPrefix,
+								                     newBulkLoadTaskState.getRange(),
+								                     bulkLoadTaskStateValue(newBulkLoadTaskState));
+								co_await taskTr.commit();
+								Version taskCommitVersion = taskTr.getCommittedVersion();
+								TraceEvent(bulkLoadVerboseEventSev(),
+								           "DDBulkLoadTaskSetCompleteTransaction",
+								           relocationIntervalId)
+								    .detail("DataMoveID", dataMoveId)
+								    .detail("CommitVersion", taskCommitVersion)
+								    .detail("JobID", newBulkLoadTaskState.getJobId())
+								    .detail("TaskID", newBulkLoadTaskState.getTaskId());
+								dataMove.bulkLoadTaskState = newBulkLoadTaskState;
+								break;
+							} catch (Error& e) {
+								err = e;
+							}
+							if (err.code() == error_code_actor_cancelled) {
+								throw err;
+							}
+							if (err.code() == error_code_bulkload_task_outdated) {
+								// Task was overwritten/superseded after the outer commit.
+								// The data move itself succeeded; the new task on this range
+								// will manage its own state. Nothing more to do here.
+								break;
+							}
+							if (++taskRetries > 30) {
+								throw err;
+							}
+							co_await taskTr.onError(err);
+						}
+					}
 
 					if (range.end == dataMove.ranges.front().end && bulkLoadTaskState.present()) {
 						Version commitVersion = tr.getCommittedVersion();

@@ -1316,7 +1316,11 @@ Future<Void> doBulkLoadTask(Reference<DataDistributor> self, KeyRange range, UID
 		// The completion of the task relies on the fact that a data move on a range is either
 		// completed by itself or replaced by a data move on the overlapping range
 		self->triggerShardBulkLoading.send(BulkLoadShardRequest(triggeredBulkLoadTask));
-		BulkLoadAck ack = co_await completeAck.getFuture(); // proceed when a data move completes with this task
+		// Timeout prevents permanent hang when data moves are abandoned during DD
+		// reinitialization or persistent transaction_too_old in finishMoveShards.
+		// On timeout, this actor exits and scheduleBulkLoadTasks will re-trigger the task.
+		BulkLoadAck ack =
+		    co_await timeoutError(completeAck.getFuture(), SERVER_KNOBS->DD_BULKLOAD_JOB_MONITOR_PERIOD_SEC * 10);
 		if (ack.unretryableError) {
 			TraceEvent(SevWarnAlways, "DDBulkLoadTaskDoTask", self->ddId)
 			    .detail("Phase", "See unretryable error")
