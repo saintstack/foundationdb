@@ -1674,12 +1674,14 @@ static Future<Void> finishMoveKeys(Database occ,
 						}
 						// decodeKeyServersValue's ordering depends on protocol path
 						// (see SystemData.cpp): the V2 path sorts but the
-						// encode-location and legacy paths don't. Sort both sides
-						// before comparing so the convergence check doesn't false-retry
-						// on a benign permutation. Matches the finishMoveShards check below.
-						std::sort(dest.begin(), dest.end());
+						// encode-location and legacy paths don't. Sort copies
+						// before comparing so the convergence check doesn't
+						// false-retry on a benign permutation, without mutating
+						// dest in place. Matches the finishMoveShards check below.
+						auto expectedDest = dest;
+						std::sort(expectedDest.begin(), expectedDest.end());
 						std::sort(checkDest.begin(), checkDest.end());
-						if (checkDest != dest) {
+						if (checkDest != expectedDest) {
 							CODE_PROBE(true, "finishMoveKeys dest changed during waitForShardReady");
 							TraceEvent(SevWarn, "FinishMoveKeysDestChanged", relocationIntervalId)
 							    .detail("KeyBegin", keys.begin)
