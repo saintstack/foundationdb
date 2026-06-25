@@ -630,7 +630,7 @@ knob_min_trace_severity=5
                     tracker.get("unhealthy_servers")
                 )
             tracker_state = tracker.get("state", {})
-            if tracker_state and not tracker_state.get("healthy", True):
+            if tracker_state and not tracker_state.get("healthy", False):
                 return "team_tracker.state={}".format(
                     tracker_state.get("name", "missing")
                 )

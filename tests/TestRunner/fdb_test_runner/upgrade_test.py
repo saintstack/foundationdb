@@ -23,9 +23,6 @@ from .test_util import random_alphanum_string
 CLUSTER_ACTIONS = ["wiggle"]
 HEALTH_CHECK_TIMEOUT_SEC = 5
 PROGRESS_CHECK_TIMEOUT_SEC = 30
-# Number of times a progress check is retried before failing. Tolerates brief
-# post-wiggle/upgrade unavailability windows without masking a real hang.
-PROGRESS_CHECK_RETRIES = 3
 TESTER_STATS_INTERVAL_SEC = 5
 TRANSACTION_RETRY_LIMIT = 100
 RUN_WITH_GDB = False
@@ -266,30 +263,17 @@ class UpgradeTest:
                 )
                 os._exit(1)
 
-    # Perform a progress check: Trigger it and wait until it is completed.
-    # The check is retried a few times: right after a wiggle/upgrade the cluster
-    # can have brief windows of unavailability (recovery, data redistribution)
-    # during which not all workloads make progress in time. A single CHECK that
-    # lands in such a window would fail spuriously, so we re-issue it before
-    # giving up; a genuinely stuck workload still fails after all attempts.
+    # Perform a progress check: Trigger it and wait until it is completed
     def progress_check(self):
-        for attempt in range(1, PROGRESS_CHECK_RETRIES + 1):
-            self.progress_event.clear()
-            os.write(self.ctrl_pipe, b"CHECK\n")
-            self.progress_event.wait(
-                None if RUN_WITH_GDB else PROGRESS_CHECK_TIMEOUT_SEC
+        self.progress_event.clear()
+        os.write(self.ctrl_pipe, b"CHECK\n")
+        self.progress_event.wait(None if RUN_WITH_GDB else PROGRESS_CHECK_TIMEOUT_SEC)
+        if self.progress_event.is_set():
+            print("Progress check: OK")
+        else:
+            assert False, "Progress check failed after upgrade to version {}".format(
+                self.cluster_version
             )
-            if self.progress_event.is_set():
-                print("Progress check: OK")
-                return
-            print(
-                "Progress check attempt {}/{} timed out after {}s".format(
-                    attempt, PROGRESS_CHECK_RETRIES, PROGRESS_CHECK_TIMEOUT_SEC
-                )
-            )
-        assert False, "Progress check failed after upgrade to version {}".format(
-            self.cluster_version
-        )
 
     # The main function of a thread for reading and processing
     # the notifications received from the tester
