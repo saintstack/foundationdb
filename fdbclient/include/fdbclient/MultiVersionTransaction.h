@@ -750,6 +750,9 @@ public:
 		ThreadFuture<Void> changed;
 		ThreadFuture<Void> dbReady;
 		ThreadFuture<Void> protocolVersionMonitor;
+		// Earliest time at which monitorProtocolVersion may start a new getServerProtocol call.
+		// Set after a transient error so that rapid re-arms (e.g. from updateDatabase) don't spin.
+		double protocolVersionMonitorBackoffUntil = 0.0;
 
 		Future<Void> sharedStateUpdater;
 

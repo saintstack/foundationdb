@@ -1542,6 +1542,23 @@ void MultiVersionDatabase::DatabaseState::addClient(Reference<ClientInfo> client
 // Watch the cluster protocol version for changes and update the database state when it does.
 // Must be called from the main thread
 ThreadFuture<Void> MultiVersionDatabase::DatabaseState::monitorProtocolVersion() {
+	// If we had a recent error, return a delay-future instead of starting a new monitor immediately.
+	// This prevents a spin loop when versionMonitorDb keeps erroring (e.g. coordinator unreachable
+	// after a topology change): updateDatabase unconditionally cancels protocolVersionMonitor and
+	// re-calls monitorProtocolVersion, so any delay must be enforced here — not in the re-arm caller.
+	double remainingBackoff = protocolVersionMonitorBackoffUntil - now();
+	if (remainingBackoff > 0) {
+		Reference<DatabaseState> self = Reference<DatabaseState>::addRef(this);
+		return onMainThread([self, remainingBackoff]() -> Future<Void> {
+			return map(delay(remainingBackoff), [self](Void) -> Void {
+				if (self->initializationState != InitializationState::CLOSED) {
+					self->protocolVersionMonitor = self->monitorProtocolVersion();
+				}
+				return Void();
+			});
+		});
+	}
+
 	Optional<ProtocolVersion> expected = dbProtocolVersion;
 	ThreadFuture<ProtocolVersion> f = versionMonitorDb->getServerProtocol(dbProtocolVersion);
 
@@ -1568,6 +1585,19 @@ ThreadFuture<Void> MultiVersionDatabase::DatabaseState::monitorProtocolVersion()
 				self->initializationError = cv.getError();
 				self->initializationState = InitializationState::INITIALIZATION_FAILED;
 				self->dbVar->set(Reference<IDatabase>(), true);
+			} else {
+				// Transient error (e.g. coordinator unreachable during a topology change).
+				// Set the backoff window and re-arm. The re-arm call will see the backoff and
+				// return a delay-future, ensuring at least COORDINATOR_RECONNECTION_DELAY seconds
+				// pass before the next getServerProtocol attempt — even if updateDatabase cancels
+				// protocolVersionMonitor and calls monitorProtocolVersion again in the interim.
+				onMainThreadVoid([self]() {
+					if (self->initializationState != InitializationState::CLOSED) {
+						self->protocolVersionMonitorBackoffUntil =
+						    now() + CLIENT_KNOBS->COORDINATOR_RECONNECTION_DELAY;
+						self->protocolVersionMonitor = self->monitorProtocolVersion();
+					}
+				});
 			}
 		} else {
 			clusterVersion = cv.get();
