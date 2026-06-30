@@ -918,10 +918,6 @@ public:
 	double SERVER_READY_QUORUM_INTERVAL;
 	double SERVER_READY_QUORUM_TIMEOUT;
 	double BUGGIFY_GET_SHARD_STATE_DELAY; // Per-active-fetchKeys delay injected in getShardState (simulation only)
-	double BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY; // Delay injected before processing each relocationComplete event in
-	                                                 // DDQueue (simulation only). Used to force fetchKeysComplete set
-	                                                 // growth — the p67/p102 cascade amplifier mechanism — without
-	                                                 // requiring real CPU saturation.
 	double REMOVE_RETRY_DELAY;
 	int MOVE_KEYS_KRM_LIMIT;
 	int FINISH_MOVE_KEYS_MAX_RETRIES; // Max retries in finishMoveKeys before returning move to queue; set very high to

@@ -59,9 +59,3 @@ Future<Void> disableConsistencyScanInSim(Database db, bool waitForCompletion);
 // Uses a plain boolean (not AsyncVar) to avoid cross-process callback issues in simulation.
 void disableDDPipelineControl();
 bool isDDPipelineControlEnabled();
-
-// DDPipelineStall workload gates BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY so it
-// only fires during the experimental observation window (not during data load).
-void enableDDPipelineStallTrigger();
-void disableDDPipelineStallTrigger();
-bool isDDPipelineStallTriggerEnabled();

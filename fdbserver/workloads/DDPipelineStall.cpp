@@ -259,14 +259,6 @@ struct DDPipelineStallWorkload : TestWorkload {
 		// Also run background writes to keep source SSes busy
 		Future<Void> bgWrites = backgroundWrites(cx, self);
 
-		// Arm the BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY knob now. Before this
-		// point (data load + setup) the cluster does normal shard placement work
-		// that would itself trigger relocationComplete events; we don't want the
-		// buggified delay to slow load down. From here on, every relocationComplete
-		// the DDQueue handler processes is artificially delayed — forcing
-		// fetchKeysComplete set growth (the v8 cascade amplifier).
-		enableDDPipelineStallTrigger();
-
 		// Wave-exclude: split the excludeCount into excludeWaves batches.
 		// Each wave triggers a fresh team-rebuild burst while the pipeline
 		// is still draining moves from previous waves — sustained pressure
@@ -318,10 +310,6 @@ struct DDPipelineStallWorkload : TestWorkload {
 		bgWrites.cancel();
 		monitor.cancel();
 		rolling.cancel();
-
-		// Disarm the buggified relocationComplete delay so include-all + cleanup
-		// don't get artificially slowed.
-		disableDDPipelineStallTrigger();
 
 		TraceEvent(SevWarnAlways, "DDPipelineStallComplete")
 		    .detail("PeakInFlight", self->peakInFlight)

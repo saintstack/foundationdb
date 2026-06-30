@@ -89,20 +89,6 @@ min_trace_severity = 10
 # being active so cluster setup is unaffected.
 buggify_get_shard_state_delay = 1
 
-# Force fetchKeysComplete set growth — the p67/p102 cascade amplifier mechanism
-# (v8 report Fix 7 / PR #12993). Each relocationComplete handler invocation
-# is delayed by N seconds; while this handler is blocked, completions queue
-# up faster than they can be cleared from the fetchKeysComplete set. This
-# substitutes for the production starvation condition (DD event loop saturated
-# by competing events) which simulation cannot produce organically.
-#
-# DISABLED 2026-06-27: this knob targets the post-completion bookkeeping path,
-# not v8's actor-lifetime-extension mechanism. It produces fake inflation
-# (queued completions counted as in-flight) but doesn't reproduce the
-# production retry storm. Leaving the code in place for now in case useful
-# later, but disabled in this test.
-buggify_ddqueue_relocationcomplete_delay = 0.0
-
 # Slow down fetchKeys so activePermits stays > 0 continuously.
 # 2.0s is the sweet spot: slow enough to keep permits active but fast
 # enough that shards reach READABLE so finishMoveKeys enters the
