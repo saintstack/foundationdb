@@ -2806,6 +2806,8 @@ struct DDQueueImpl {
 		state std::set<UID> serversToLaunchFrom;
 		state KeyRange keysToLaunchFrom;
 		state RelocateData launchData;
+		state RelocateData relocComplete; // Holds the relocationComplete value across the
+		                                  // BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY wait point.
 		state Future<Void> recordMetrics = delay(SERVER_KNOBS->DD_QUEUE_LOGGING_INTERVAL);
 
 		state std::vector<Future<Void>> ddQueueFutures;
@@ -2887,20 +2889,35 @@ struct DDQueueImpl {
 						serversToLaunchFrom.insert(done.src.begin(), done.src.end());
 					}
 					when(RelocateData done = waitNext(self->relocationComplete.getFuture())) {
+						// Simulation-only: inject delay before processing each relocationComplete
+						// event. Forces the v8 cascade-amplifier signature (fetchKeysComplete set
+						// growth) by starving this handler — the only place fetchKeysComplete.erase()
+						// is called. Production starvation came from the DD event loop being CPU-
+						// saturated; this knob substitutes that condition in simulation. Gated by
+						// isDDPipelineStallTriggerEnabled() so it only fires once the workload
+						// signals (post-load, post-exclude) — otherwise normal cluster setup work
+						// would trigger it too. The `relocComplete` state variable carries `done`
+						// across the wait point.
+						relocComplete = done;
+						if (SERVER_KNOBS->BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY > 0 &&
+						    isDDPipelineStallTriggerEnabled()) {
+							wait(delay(SERVER_KNOBS->BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY,
+							           TaskPriority::DataDistributionLaunch));
+						}
 						self->activeRelocations--;
 						TraceEvent(SevVerbose, "InFlightRelocationChange")
-						    .detail("Complete", done.dataMoveId)
-						    .detail("IsRestore", done.isRestore())
+						    .detail("Complete", relocComplete.dataMoveId)
+						    .detail("IsRestore", relocComplete.isRestore())
 						    .detail("Total", self->activeRelocations);
-						self->finishRelocation(done.priority, done.healthPriority);
-						self->fetchKeysComplete.erase(done);
-						// self->logRelocation( done, "ShardRelocatorDone" );
+						self->finishRelocation(relocComplete.priority, relocComplete.healthPriority);
+						self->fetchKeysComplete.erase(relocComplete);
+						// self->logRelocation( relocComplete, "ShardRelocatorDone" );
 						self->noErrorActors.add(
-						    tag(delay(0, TaskPriority::DataDistributionLaunch), done.keys, rangesComplete));
+						    tag(delay(0, TaskPriority::DataDistributionLaunch), relocComplete.keys, rangesComplete));
 						if (g_network->isSimulated() && debug_isCheckRelocationDuration() &&
-						    now() - done.startTime > 60) {
+						    now() - relocComplete.startTime > 60) {
 							TraceEvent(SevWarnAlways, "RelocationDurationTooLong")
-							    .detail("Duration", now() - done.startTime);
+							    .detail("Duration", now() - relocComplete.startTime);
 							debug_setCheckRelocationDuration(false);
 						}
 					}
@@ -2918,6 +2935,7 @@ struct DDQueueImpl {
 						TraceEvent("MovingData", self->distributorId)
 						    .detail("InFlight", self->activeRelocations)
 						    .detail("InQueue", self->queuedRelocations)
+						    .detail("FetchKeysCompleteSize", self->fetchKeysComplete.size())
 						    .detail("AverageShardSize", req.getFuture().isReady() ? req.getFuture().get() : -1)
 						    .detail("UnhealthyRelocations", self->unhealthyRelocations)
 						    .detail("HighestPriority", highestPriorityRelocation)

@@ -53,6 +53,26 @@ void disableDDPipelineControl() {
 	g_ddPipelineControlEnabled = false;
 }
 
+// DDPipelineStall workload toggles this so BUGGIFY_DDQUEUE_RELOCATIONCOMPLETE_DELAY
+// only fires during the experimental observation window, not during the cluster's
+// setup / data-load phase. Without this gate, the buggified handler delay slows
+// data loading enough that the test takes hours to reach the actual exclude burst.
+static bool g_ddPipelineStallTriggerEnabled = false;
+
+bool isDDPipelineStallTriggerEnabled() {
+	return g_ddPipelineStallTriggerEnabled;
+}
+
+void enableDDPipelineStallTrigger() {
+	TraceEvent("DDPipelineStallTriggerEnabled");
+	g_ddPipelineStallTriggerEnabled = true;
+}
+
+void disableDDPipelineStallTrigger() {
+	TraceEvent("DDPipelineStallTriggerDisabled");
+	g_ddPipelineStallTriggerEnabled = false;
+}
+
 Future<std::vector<WorkerDetails>> getWorkers(Reference<AsyncVar<ServerDBInfo> const> dbInfo, int flags) {
 	while (true) {
 		auto res = co_await race(

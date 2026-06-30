@@ -69,16 +69,39 @@ max_shard_bytes = 20000
 # for triggering the p127 death spiral on DD restart)
 shard_encode_location_metadata = true
 
-# Allow large trace output (retry storm generates many events)
-max_trace_lines = 10000000
+# Allow large trace output (retry storm generates many events).
+max_trace_lines = 8000000
+
+# Filter low-priority chatter (Severity=5) — bulkload progress events and similar
+# debug logging dominate trace volume but carry no cascade signal. Our cascade
+# indicators are Severity=10 (MovingData) and SevWarn/SevWarnAlways
+# (DDPipelineStallSample/Detected/RollingExclude*). Sim default is severity 1
+# (everything); raising to 10 cuts trace volume by ~5× without losing signal.
+min_trace_severity = 10
 
 # Concurrency limit for getShardState on each dest SS.
 # When set to N, only N getShardState requests are processed concurrently per SS.
 # Additional requests queue up in a FlowLock, simulating CPU contention.
 # Self-reinforcing: retries flood the queue → latency grows → more timeouts → more retries.
-# At 2: during normal ops (1-2 concurrent) no queuing. After exclude with
-# 15 FlowLock slots retrying at 10ms → queue builds → latency explodes → BytesRate→0.
-buggify_get_shard_state_delay = 2
+# At 1: tightest constraint — single getShardState slot per SS. With the 15-slot
+# finishMoveShards pipeline all retrying, queue depth → ~15, delay = 0.5 × 15
+# = 7.5s per response. Every txn blows the 5s budget. Gated by fetchKeys
+# being active so cluster setup is unaffected.
+buggify_get_shard_state_delay = 1
+
+# Force fetchKeysComplete set growth — the p67/p102 cascade amplifier mechanism
+# (v8 report Fix 7 / PR #12993). Each relocationComplete handler invocation
+# is delayed by N seconds; while this handler is blocked, completions queue
+# up faster than they can be cleared from the fetchKeysComplete set. This
+# substitutes for the production starvation condition (DD event loop saturated
+# by competing events) which simulation cannot produce organically.
+#
+# DISABLED 2026-06-27: this knob targets the post-completion bookkeeping path,
+# not v8's actor-lifetime-extension mechanism. It produces fake inflation
+# (queued completions counted as in-flight) but doesn't reproduce the
+# production retry storm. Leaving the code in place for now in case useful
+# later, but disabled in this test.
+buggify_ddqueue_relocationcomplete_delay = 0.0
 
 # Slow down fetchKeys so activePermits stays > 0 continuously.
 # 2.0s is the sweet spot: slow enough to keep permits active but fast
@@ -97,16 +120,48 @@ testTitle = "DDPipelineStall"
     # With min_shard_bytes=5KB (max=20KB), creates ~25,000 shards
     # Excluding 3/9 moves ~8,000 shards. With 5s fetchKeys delay
     # = ~4,000s to drain. Queue never empties during observe.
-    keyCount = 500000
+    # 1.5M keys × 1KB = ~1.5 GB of data. With min/max shard 5K/20K, creates
+    # ~75,000 shards (3× the previous 500K-keys config). Larger keyspace
+    # means queue can't fully drain during observe — accumulation can
+    # compound across the 15-min observe window.
+    keyCount = 1500000
     valueSize = 1000
-    # Exclude 3 of 9 storage servers -> triggers movement of ~1/3 of all shards
-    excludeCount = 3
+    # Exclude 2 of 9 storage servers in 2 waves. Leaves 7 SSes for the
+    # rolling-exclude phase to cycle through. (Was 5 in 3 waves — too
+    # aggressive when combined with rolling, left only 4 SSes and made
+    # the cluster freeze rather than cascade.) The initial burst still
+    # triggers a meaningful exclude-shaped DD workload; rolling sustains
+    # it across the observe window.
+    excludeCount = 2
+    excludeWaves = 2
+    excludeWaveDelay = 30.0
+    # Heavier background writes: ~1000 writes/sec (was ~100). Forces dest
+    # SSes to do mutation work concurrently with fetchKeys — matches p102.
+    backgroundWriteBatchSize = 20
+    backgroundWriteDelaySeconds = 0.005
     # Wait 180s (sim time) after data load for DD to split into tiny shards
     loadTimeout = 180.0
-    # Observe for 15 minutes — need long window to see sustained stall
-    observeTime = 900.0
+    # Observe for 5 minutes (sim) — iter #1 baseline that produced clean
+    # sustained 7× InFlight inflation. Use this for fix validation
+    # comparison (PR #12981, PR #12993).
+    observeTime = 300.0
     sampleInterval = 10.0
     # Stall detection: dataMoves accumulating above 50 means finishMoveKeys is stuck
     dataMovesThreshold = 50
     inFlightThreshold = 200
     ddRestartsThreshold = 3
+
+    # Sustain DD work across the observe window by continuously cycling
+    # non-permanently-excluded SSes in and out. Without this, the initial
+    # wave-exclude burst drains in minutes and the cascade trigger
+    # (BUGGIFY_GET_SHARD_STATE_DELAY) has nothing left to amplify.
+    # v8 production p127 sustained 50+ minutes of cascade because mako
+    # traffic + ongoing rebalance kept generating new moves.
+    #
+    # Iter #1 params (gentler): produced sustained 7× InFlight inflation
+    # over 15 simminutes with no sim host crash. Reverting to these from
+    # iter #2's (15s/2s/2) which crashed sim host at simtime 1262.
+    rollingExclude = true
+    rollingCycleSeconds = 20.0
+    rollingPauseSeconds = 10.0
+    rollingPerCycle = 1
