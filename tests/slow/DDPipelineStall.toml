@@ -87,14 +87,20 @@ min_trace_severity = 10
 # finishMoveShards pipeline all retrying, queue depth → ~15, delay = 0.5 × 15
 # = 7.5s per response. Every txn blows the 5s budget. Gated by fetchKeys
 # being active so cluster setup is unaffected.
-buggify_get_shard_state_delay = 1
+#
+# 2026-06-30 cleaner-mechanism experiment: setting this to 0 disables the
+# buggify substitute. Instead we drive the cascade via the LITERAL production
+# mechanism — getShardState(READABLE) blocks on fetchKeys completion (verified
+# in storageserver.actor.cpp:2712-2718). Just need storage_fetch_keys_delay
+# above the 5s txn budget.
+buggify_get_shard_state_delay = 0
 
 # Slow down fetchKeys so activePermits stays > 0 continuously.
-# 2.0s is the sweet spot: slow enough to keep permits active but fast
-# enough that shards reach READABLE so finishMoveKeys enters the
-# transaction phase where the getShardState delay can fire.
-# At 5.0s fetchKeys dominates and our delay never triggers.
-storage_fetch_keys_delay = 2.0
+# 2026-06-30 cleaner-mechanism: cranking to 6.0 (above 5s txn budget).
+# With this alone (no buggify_get_shard_state_delay), the in-txn
+# waitForShardReady waits on a fetchKeys that takes >5s — the LITERAL
+# production mechanism. No artificial RPC delay needed.
+storage_fetch_keys_delay = 6.0
 storage_fetch_keys_rate_limit = 500
 
 [[test]]
