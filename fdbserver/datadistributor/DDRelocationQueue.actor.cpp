@@ -2918,6 +2918,7 @@ struct DDQueueImpl {
 						TraceEvent("MovingData", self->distributorId)
 						    .detail("InFlight", self->activeRelocations)
 						    .detail("InQueue", self->queuedRelocations)
+						    .detail("FetchKeysCompleteSize", self->fetchKeysComplete.size())
 						    .detail("AverageShardSize", req.getFuture().isReady() ? req.getFuture().get() : -1)
 						    .detail("UnhealthyRelocations", self->unhealthyRelocations)
 						    .detail("HighestPriority", highestPriorityRelocation)
