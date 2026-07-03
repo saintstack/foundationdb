@@ -1182,12 +1182,22 @@ Future<Void> waitForShardReady(StorageServerInterface server,
                                KeyRange keys,
                                Version minVersion,
                                GetShardStateRequest::waitMode mode) {
+	double startTime = now();
 	while (true) {
 		Error err;
 		try {
 			GetShardStateReply rep =
 			    co_await server.getShardState.getReply(GetShardStateRequest(keys, mode), TaskPriority::MoveKeys);
 			if (rep.first >= minVersion) {
+				// Demo instrumentation: log time from waitForShardReady entry to
+				// successful return, split by mode. READABLE mode blocks on the
+				// shard's readWrite future (fires only when fetchKeys completes);
+				// FETCHING mode returns as soon as the dest starts fetching. See
+				// fdbserver/storageserver/storageserver.actor.cpp:2712-2718.
+				TraceEvent("WaitForShardReadyTiming", server.id())
+				    .detail("Mode", mode == GetShardStateRequest::READABLE ? "READABLE" : "FETCHING")
+				    .detail("ElapsedSec", now() - startTime)
+				    .detail("KeyRangeBegin", keys.begin);
 				co_return;
 			}
 			co_await delayJittered(SERVER_KNOBS->SHARD_READY_DELAY, TaskPriority::MoveKeys);
