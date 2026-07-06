@@ -1,55 +1,64 @@
 # DD Pipeline Stall Reproduction Test
 #
-# Reproduces the p127/p102 finishMoveKeys pipeline stall in simulation.
+# Reproduces the p127/p102 finishMoveKeys cascade in simulation.
 #
 # === What we're simulating ===
 #
-# In production (p127/p102), destination storage servers became CPU-saturated
-# from concurrent fetchKeys operations on large shards (100-500MB). At 80% CPU
-# with DiskIdle=0, the SS event loop couldn't process getShardState RPCs
-# promptly. Each finishMoveKeys retry sent another RPC, adding load, making
-# responses even slower — a self-reinforcing feedback loop.
+# finishMoveKeys wraps waitForShardReady(READABLE) inside a transaction
+# that must commit within FDB's ~5s MVCC budget. On the storage server,
+# getShardState(READABLE) synchronously blocks on the shard's readWrite
+# future (verified in fdbserver/storageserver/storageserver.actor.cpp).
+# That future fires only when fetchKeys completes copying the data.
 #
-# Simulation can't create real CPU contention (single-threaded cooperative
-# scheduling), so we fake it with two mechanisms:
+# Any shard whose fetchKeys takes longer than 5 seconds therefore
+# structurally cannot let its finishMoveKeys commit. The txn ages out
+# with transaction_too_old and retries. The relocation actor stays alive
+# across retries. Active-relocations counter inflates because new
+# launches outpace delayed completions. fetchKeysComplete set grows
+# because completions queue behind retrying actors.
 #
-# 1. storage_fetch_keys_delay = 0.5s — Makes fetchKeys take 0.5s per shard
-#    instead of microseconds. Keeps fetchKeysParallelismLock.activePermits() > 0
-#    continuously on dest SSes, simulating sustained load from large-shard
-#    fetchKeys in production.
+# Production p127 hit this because 100-500 MB shards took real seconds
+# to fetch across the network. To reproduce in simulation with tiny
+# shards (5-20 KB, fetch normally in microseconds), we crank one knob:
 #
-# 2. buggify_get_shard_state_delay = 3.0 * concurrent_ops — When a dest SS has
-#    fetchKeys active AND getShardState calls arriving, each call is delayed
-#    proportional to how many are concurrent. Simulates the event loop being
-#    busy: more incoming RPCs = longer queue = longer response time.
-#    Self-reinforcing: retries add to the queue, making it worse.
+#   storage_fetch_keys_delay = 6.0
+#     Each per-shard fetchKeys operation takes 6 sim-seconds. Above the
+#     ~5s txn budget by structure. This is the LITERAL production
+#     mechanism, not an artificial substitute for a slow-RPC path.
 #
-# The combination: as long as shards are being fetched (mechanism 1 keeps this
-# true), every getShardState call is slow (mechanism 2 scales with load).
-# waitForShardReady sits inside an open transaction, so the delay pushes it
-# past the 5s commit window -> transaction_too_old -> retry at 10ms -> another
-# getShardState call -> counter goes up -> delay gets worse.
+# The workload (DDPipelineStall) then drives a continuous rolling
+# exclude/include cycle during observe so the retry storm has sustained
+# material to compound against.
 #
-# === What's real vs fake ===
+# === What's real vs simulated ===
 #
-# Real: finishMoveKeys code path, FlowLock slots, retry logic, dataMoves
-#   accumulation, startMoveKeys outpacing finishMoveKeys, OOM from fetchKeys
-#   arena growth
-# Fake: the REASON getShardState is slow (artificial delay vs real CPU
-#   saturation)
+# Real:  finishMoveKeys code path, waitForShardReady inside the txn,
+#        FlowLock slots, retry logic, actor lifetime extension,
+#        activeRelocations counter inflation, fetchKeysComplete set
+#        growth, cluster response to sustained rolling exclude.
+# Substituted: shard size. Production shards were 100-500 MB and
+#        naturally took seconds to fetch. Our sim shards are 5-20 KB
+#        so we scale up fetch time via storage_fetch_keys_delay to
+#        recreate the same structural condition.
 #
 # === Expected signals ===
 #
-# Without fixes:
-#   - BytesRate -> 0 (pipeline completely frozen)
-#   - dataMoves entries grow monotonically (startMoveKeys >> finishMoveKeys)
-#   - InFlight inflates (20x+ over baseline)
-#   - Self-sustaining (retry storm feeds itself)
-#   - OOM from fetchKeysComplete arena accumulation
-#   - With SHARD_ENCODE_LOCATION_METADATA: DD death spiral on restart
+# Baseline (mechanism present):
+#   - activeRelocations counter inflates ~6x above healthy baseline
+#     (~15 → 91 in this recipe at seed 42)
+#   - FetchKeysCompleteSize peaks ~80, sustained across the observe
+#     window (48-67 across 15 sim-minutes)
+#   - InQueue held at saturation with slow drain
+#   - Workload PipelineStalled metric fires
 #
-# With fixes (PRs #12981, #12991, #13112):
-#   - Pipeline recovers or never stalls
+# Mechanism fixed (waitForShardReady moved outside the txn):
+#   - InFlight peak drops to ~30 (baseline ~15 + normal-work bursts)
+#   - FetchKeysCompleteSize stays at 0 throughout — no accumulation
+#   - InQueue drains cleanly rather than holding at saturation
+#   - PipelineStalled does not fire
+#
+# See ~/claude_wiki/dd-migration-stuck/writeup-for-pr.md for the full
+# before/after story with sim and K8s validation numbers.
 
 [configuration]
 config = "triple"
@@ -59,9 +68,9 @@ machineCount = 9
 processesPerMachine = 1
 
 [[knobs]]
-# Force tiny shards so 50MB of data creates thousands of shards.
-# min=5KB, max=20KB forces DD to split at 20KB boundaries.
-# 50MB / 20KB = ~2,500 shards. Excluding 3/9 moves ~800.
+# Tiny shards (5-20 KB): a 1.5 GB dataset produces ~75k shards. Fetches
+# would normally complete in microseconds — storage_fetch_keys_delay
+# below scales them up to production-size fetch time.
 min_shard_bytes = 5000
 max_shard_bytes = 20000
 
@@ -79,27 +88,11 @@ max_trace_lines = 8000000
 # (everything); raising to 10 cuts trace volume by ~5× without losing signal.
 min_trace_severity = 10
 
-# Concurrency limit for getShardState on each dest SS.
-# When set to N, only N getShardState requests are processed concurrently per SS.
-# Additional requests queue up in a FlowLock, simulating CPU contention.
-# Self-reinforcing: retries flood the queue → latency grows → more timeouts → more retries.
-# At 1: tightest constraint — single getShardState slot per SS. With the 15-slot
-# finishMoveShards pipeline all retrying, queue depth → ~15, delay = 0.5 × 15
-# = 7.5s per response. Every txn blows the 5s budget. Gated by fetchKeys
-# being active so cluster setup is unaffected.
-#
-# 2026-06-30 cleaner-mechanism experiment: setting this to 0 disables the
-# buggify substitute. Instead we drive the cascade via the LITERAL production
-# mechanism — getShardState(READABLE) blocks on fetchKeys completion (verified
-# in storageserver.actor.cpp:2712-2718). Just need storage_fetch_keys_delay
-# above the 5s txn budget.
-buggify_get_shard_state_delay = 0
-
-# Slow down fetchKeys so activePermits stays > 0 continuously.
-# 2026-06-30 cleaner-mechanism: cranking to 6.0 (above 5s txn budget).
-# With this alone (no buggify_get_shard_state_delay), the in-txn
-# waitForShardReady waits on a fetchKeys that takes >5s — the LITERAL
-# production mechanism. No artificial RPC delay needed.
+# Per-shard fetchKeys delay. 6.0 sim-seconds is above FDB's ~5s MVCC
+# transaction budget. Any waitForShardReady(READABLE) inside a
+# finishMoveKeys transaction blocks on this fetch, exceeds the budget,
+# and produces transaction_too_old — the cascade trigger. See
+# header block for the full mechanism.
 storage_fetch_keys_delay = 6.0
 storage_fetch_keys_rate_limit = 500
 
@@ -133,9 +126,9 @@ testTitle = "DDPipelineStall"
     backgroundWriteDelaySeconds = 0.005
     # Wait 180s (sim time) after data load for DD to split into tiny shards
     loadTimeout = 180.0
-    # Observe for 5 minutes (sim) — iter #1 baseline that produced clean
-    # sustained 7× InFlight inflation. Use this for fix validation
-    # comparison (PR #12981, PR #12993).
+    # Observe for 5 minutes (sim). Long enough for sustained rolling
+    # exclude/include (below) to compound cascade signature; short
+    # enough to keep total run time under an hour.
     observeTime = 300.0
     sampleInterval = 10.0
     # Stall detection: dataMoves accumulating above 50 means finishMoveKeys is stuck
@@ -146,13 +139,16 @@ testTitle = "DDPipelineStall"
     # Sustain DD work across the observe window by continuously cycling
     # non-permanently-excluded SSes in and out. Without this, the initial
     # wave-exclude burst drains in minutes and the cascade trigger
-    # (BUGGIFY_GET_SHARD_STATE_DELAY) has nothing left to amplify.
-    # v8 production p127 sustained 50+ minutes of cascade because mako
-    # traffic + ongoing rebalance kept generating new moves.
+    # (storage_fetch_keys_delay above the 5s txn budget) has no fresh
+    # material to compound against. Production p127 sustained ~50
+    # minutes of cascade because mako write traffic + ongoing rebalance
+    # kept generating new moves the same way.
     #
-    # Iter #1 params (gentler): produced sustained 7× InFlight inflation
-    # over 15 simminutes with no sim host crash. Reverting to these from
-    # iter #2's (15s/2s/2) which crashed sim host at simtime 1262.
+    # 20s excluded / 10s pause / 1 SS per cycle produces sustained
+    # cascade signature over 15 sim-minutes without crashing the sim
+    # host under the ~8 GiB default fdbserver --memory ceiling. More
+    # aggressive rolling (2 SSes/cycle, shorter pause) has been
+    # observed to crash the sim host at simtime ~1244.
     rollingExclude = true
     rollingCycleSeconds = 20.0
     rollingPauseSeconds = 10.0
