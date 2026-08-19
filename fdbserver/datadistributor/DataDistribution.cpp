@@ -445,6 +445,15 @@ public:
 
 	Optional<DDBulkLoadJobManager> bulkLoadJobManager;
 
+	// How many times a task covering a given range has been recreated after exhausting its re-dispatch
+	// budget, keyed by the range's begin key. Re-dispatching a task cannot clear a failure that is a
+	// property of the task's range -- notably a source set wide enough that no destination team is
+	// disjoint from it -- because every attempt presents the same range. Recreating the task lets the job
+	// executor rebuild it from manifest entries, which can group the range differently and so compute a
+	// different src. Bounded because recreation that never succeeds would loop as surely as re-dispatch
+	// does. Reset per DD generation, which is intended.
+	std::map<Key, int> recreatedBulkLoadRanges;
+
 	bool bulkDumpEnabled = false;
 	ParallelismLimitor bulkDumpParallelismLimitor;
 	std::string folder;
@@ -1103,6 +1112,54 @@ Future<std::pair<BulkLoadTaskState, Version>> triggerBulkLoadTask(Reference<Data
 }
 
 // TODO(BulkLoad): add reason to persist
+// Erase a Triggered/Running task's persisted state so the job executor rebuilds it from manifest
+// entries on its next scan, as a fresh task with a new taskId.
+//
+// This is the recovery for a failure the task's own range causes, which re-dispatch cannot clear: every
+// re-dispatch presents the identical range and so recomputes the identical source set. The clearest case
+// is a src wide enough that no destination team is disjoint from it, since src is accumulated as the
+// union of source servers over every shard the range spans. Rebuilding may group the range differently
+// and so produce a workable src.
+//
+// The range keeps its coverage in the job's manifest, so erasing here does not drop data: the executor
+// treats a range with no task as unstarted, which is the same state it was in before this task existed.
+// That is the difference from marking the task Error, which leaves the range owned by a task nothing
+// will ever run.
+Future<Void> recreateBulkLoadTask(Reference<DataDistributor> self, KeyRange taskRange, UID taskId) {
+	Database cx = self->txnProcessor->context();
+	Transaction tr(cx);
+	while (true) {
+		Error err;
+		try {
+			tr.setOption(FDBTransactionOptions::LOCK_AWARE);
+			tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+			co_await checkMoveKeysLock(&tr, self->context->lock, self->context->ddEnabledState.get());
+			// Confirm we are erasing the task we think we are, and that it has not already moved on.
+			BulkLoadTaskState existing =
+			    co_await getBulkLoadTask(&tr, taskRange, taskId, { BulkLoadPhase::Triggered, BulkLoadPhase::Running });
+			ASSERT(taskRange == existing.getRange() && taskId == existing.getTaskId());
+			ASSERT(normalKeys.contains(taskRange));
+			co_await krmSetRangeCoalescing(
+			    &tr, bulkLoadTaskPrefix, taskRange, normalKeys, bulkLoadTaskStateValue(BulkLoadTaskState()));
+			co_await tr.commit();
+			TraceEvent(SevWarnAlways, "DDBulkLoadTaskRecreate", self->ddId)
+			    .detail("CommitVersion", tr.getCommittedVersion())
+			    .detail("TaskRange", taskRange)
+			    .detail("TaskID", taskId);
+			break;
+		} catch (Error& e) {
+			err = e;
+		}
+		if (err.code() != error_code_actor_cancelled) {
+			TraceEvent(SevWarn, "DDBulkLoadTaskRecreateError", self->ddId)
+			    .errorUnsuppressed(err)
+			    .detail("TaskRange", taskRange)
+			    .detail("TaskID", taskId);
+		}
+		co_await tr.onError(err);
+	}
+}
+
 Future<Void> failBulkLoadTask(Reference<DataDistributor> self,
                               KeyRange taskRange,
                               UID taskId,
@@ -1276,6 +1333,33 @@ Future<Void> doBulkLoadTask(Reference<DataDistributor> self, KeyRange range, UID
 			    .detail("MaxRetryableRedispatch", maxRetryableRedispatch)
 			    .detail("Duration", now() - beginTime);
 			throw data_move_dest_team_not_found();
+		}
+
+		// A retryable error that survives the whole budget is almost never transient: re-dispatch presents
+		// the same range every time, so a failure the range causes -- a src too wide for any team to be
+		// disjoint from -- cannot clear. Recreate the task instead, letting the executor rebuild it from
+		// manifest entries with a possibly different grouping, which is the recovery that existed before
+		// this task was kept alive across retries. Bounded, because recreation that never succeeds loops
+		// just as re-dispatch does; past the bound we fall through and mark Error as before.
+		int const maxRecreate = buggify() ? deterministicRandom()->randomInt(0, 2) : 2;
+		if (retriesExhausted && !ack.unretryableError && self->recreatedBulkLoadRanges[range.begin] < maxRecreate) {
+			int const recreateCount = ++self->recreatedBulkLoadRanges[range.begin];
+			CODE_PROBE(true, "Bulkload task recreated after exhausting recoverable retries");
+			TraceEvent(SevWarnAlways, "DDBulkLoadTaskDoTask", self->ddId)
+			    .detail("Phase", "Retryable error budget exhausted; recreating task")
+			    .detail("CancelledDataMovePriority", ack.dataMovePriority)
+			    .detail("Range", range)
+			    .detail("TaskID", taskId)
+			    .detail("RestartCount", triggeredBulkLoadTask.restartCount)
+			    .detail("RecreateCount", recreateCount)
+			    .detail("MaxRecreate", maxRecreate)
+			    .detail("Duration", now() - beginTime);
+			// Drop the in-memory publication for the same reason the re-dispatch path does: publishTask
+			// refuses an already-published taskId, so leaving it behind blocks the replacement task.
+			self->bulkLoadTaskCollection->eraseTask(triggeredBulkLoadTask);
+			co_await recreateBulkLoadTask(self, range, taskId);
+			self->bulkLoadEngineParallelismLimitor.decrementTaskCounter();
+			co_return;
 		}
 
 		if (ack.unretryableError || retriesExhausted) {

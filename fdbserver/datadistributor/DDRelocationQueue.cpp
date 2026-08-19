@@ -153,15 +153,21 @@ static bool shouldRetryDestinationTeamFailure(bool doBulkLoading, RelocateData c
 // budget spread across tasks never reaches it.
 static bool injectBulkLoadDestinationTeamFailure(bool doBulkLoading, RelocateData const& rd) {
 	static int injected = 0;
-	static UID targetTaskId;
+	static Key targetRangeBegin;
+	static bool targetChosen = false;
 	if (!doBulkLoading || !g_network->isSimulated() ||
 	    injected >= SERVER_KNOBS->BULKLOAD_SIM_INJECT_DEST_TEAM_FAILURES) {
 		return false;
 	}
-	UID const taskId = rd.bulkLoadTask.get().coreState.getTaskId();
-	if (!targetTaskId.isValid()) {
-		targetTaskId = taskId;
-	} else if (targetTaskId != taskId) {
+	// Target a RANGE, not a taskId. A task that exhausts its re-dispatch budget is recreated with a new
+	// taskId covering the same range, so targeting the taskId would stop injecting at exactly that point
+	// and the give-up path would never be reached -- the budget bounds one range's total attempts, which
+	// is what the exhaustion test needs to drive.
+	Key const rangeBegin = rd.bulkLoadTask.get().coreState.getRange().begin;
+	if (!targetChosen) {
+		targetRangeBegin = rangeBegin;
+		targetChosen = true;
+	} else if (targetRangeBegin != rangeBegin) {
 		return false;
 	}
 	++injected;

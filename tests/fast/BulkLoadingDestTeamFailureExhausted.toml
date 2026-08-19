@@ -1,8 +1,13 @@
 # BulkLoad give-up path when retries cannot clear a destination-team failure
 #
 # Complement of BulkLoadingDestTeamFailure.toml: injects more recoverable failures than the
-# re-dispatch budget allows, so one task exhausts it and is marked Error. What must not happen either
-# way is an endless retry loop, or a task reporting success without ingesting its data.
+# re-dispatch budget allows, so one task exhausts it, is recreated, exhausts the replacement's budget
+# too, and is finally marked Error. What must not happen either way is an endless retry loop, an endless
+# recreate loop, or a task reporting success without ingesting its data.
+#
+# The injection targets a RANGE rather than a taskId, because a recreated task covers the same range
+# under a new taskId; targeting the taskId would stop injecting at the first recreation and never reach
+# give-up.
 #
 # The injection budget is spent on a single task, since the budget bounds one task's restartCount; a
 # budget spread across tasks retries each a few times and never reaches the give-up path.
@@ -44,7 +49,11 @@ disable_audit_storage_final_replica_check_in_sim = true
 max_trace_lines = 5000000
 
 # Exhaust the re-dispatch budget for one task.
-bulkload_sim_inject_dest_team_failures = 40
+# 80, not 40. A task that exhausts its re-dispatch budget is now recreated rather than marked Error, and
+# the replacement gets a fresh budget, so reaching the give-up path costs maxRetryableRedispatch *
+# (maxRecreate + 1) = 20 * 3 = 60 injections outside buggify. 40 would let the task succeed on attempt 41
+# and this test would silently stop covering give-up.
+bulkload_sim_inject_dest_team_failures = 80
 
 
 [[test]]
