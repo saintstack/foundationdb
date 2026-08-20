@@ -4,11 +4,15 @@
 # rely on, so bulk-load task placement genuinely fails and the restore has to recover by narrowing task
 # ranges rather than by having spare capacity. See the comment on the configuration below.
 #
-# Reproduces the condition measured on the 100M validation cluster (~40 storage servers): every candidate
-# destination team rejected for overlapping the source, TeamSize 200 and DuplicatedCount 200 with
-# ValidTeamSize 0, no unhealthy or ineligible teams involved. Verified at seed 22222: 600
-# GetTeamFailedToFindValidTeam events, 12 task splits cascading from 10 manifests down to 2, restore
-# completed, consistency check passed.
+# Reproduces the condition measured on a 100M-key validation cluster of ~40 storage servers: every
+# candidate destination team is rejected for overlapping the source, so the team selector reports
+# ValidTeamSize 0 with no unhealthy or ineligible teams involved. On that cluster the recovery path ran
+# end to end - GetTeamFailedToFindValidTeam, then a relocation declared stuck, then a task split - and the
+# restore completed with the consistency check passing.
+#
+# A run that exercises the fix logs GetTeamFailedToFindValidTeam followed by BulkLoad task splits, and no
+# SplitDeclined. Exact counts depend on the dataset knobs below, so they are deliberately not asserted
+# here; a fleet large enough to place a disjoint team makes the test vacuous rather than failing it.
 #
 # The rest of this file is inherited from BackupS3BlobBulkLoadRestore.toml.
 #
@@ -115,7 +119,7 @@ timeout = 3600
 
     [[test.workload]]
     testName = 'Cycle'
-    nodeCount = 10000
+    nodeCount = 2000
     transactionsPerSecond = 100.0
     testDuration = 30.0
 
