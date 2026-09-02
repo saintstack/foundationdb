@@ -37,13 +37,7 @@ struct ExclusionTracker {
 	Database db;
 	Future<Void> trackerFuture;
 
-	ExclusionTracker() = default;
 	explicit ExclusionTracker(Database db) : db(db) { trackerFuture = tracker(); }
-
-	bool isFailedOrExcluded(NetworkAddress addr) {
-		AddressExclusion addrExclusion(addr.ip, addr.port);
-		return excluded.contains(addrExclusion) || failed.contains(addrExclusion);
-	}
 
 	// Note the tracker is intended to be used by the Data Distributor. The tracker will check for excluded localities
 	// based on the server list, the server list only includes storage processes.

@@ -70,7 +70,7 @@ struct StorageWiggler : ReferenceCounted<StorageWiggler> {
 	bool empty() const { return wiggle_pq.empty(); }
 
 	// It's guarantee that When a.metadata >= b.metadata, if !necessary(a) then !necessary(b)
-	bool necessary(const UID& serverId, const StorageMetadataType& metadata) const;
+	static bool necessary(const StorageMetadataType& metadata);
 
 	// try to return the next storage server that is necessary to wiggle
 	Optional<UID> getNextServerId(bool necessaryOnly = true);
@@ -83,7 +83,6 @@ struct StorageWiggler : ReferenceCounted<StorageWiggler> {
 			lastStateChangeTs = g_network->now();
 		}
 	}
-	static std::string getWiggleStateStr(State s) { return StorageWigglerState::toString(s); }
 
 	// -- statistic update
 
