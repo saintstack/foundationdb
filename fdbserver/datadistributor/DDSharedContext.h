@@ -35,30 +35,20 @@ public:
 	const std::unique_ptr<DDEnabledState>
 	    ddEnabledState; // Note: can't be reset because the underlying object is shared with snapshot server
 
-	DataDistributorInterface interface;
 	UID ddId;
 	MoveKeysLock lock;
 	bool trackerCancelled = false;
 	DatabaseConfiguration configuration;
 
-	Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure;
-
 	Reference<DataDistributionTracker> tracker;
 	Reference<DDQueue> ddQueue;
 	Reference<DDTeamCollection> primaryTeamCollection, remoteTeamCollection;
 
-	DDSharedContext();
 	~DDSharedContext();
 	explicit DDSharedContext(const DataDistributorInterface& iface);
 	explicit DDSharedContext(UID id);
 
-	UID id() const { return ddId; }
-
 	void markTrackerCancelled() { trackerCancelled = true; }
-
-	bool isTrackerCancelled() const { return trackerCancelled; }
-
-	decltype(auto) usableRegions() const { return configuration.usableRegions; }
 
 	bool isDDEnabled() const { return ddEnabledState->isEnabled(); };
 };

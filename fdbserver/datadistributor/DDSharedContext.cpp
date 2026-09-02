@@ -22,13 +22,9 @@
 
 #include "DDRelocationQueue.h"
 
-DDSharedContext::DDSharedContext() = default;
-
-DDSharedContext::DDSharedContext(const DataDistributorInterface& iface) : DDSharedContext(iface.id()) {
-	interface = iface;
-}
+DDSharedContext::DDSharedContext(const DataDistributorInterface& iface) : DDSharedContext(iface.id()) {}
 
 DDSharedContext::DDSharedContext(UID id)
-  : ddEnabledState(new DDEnabledState), ddId(id), shardsAffectedByTeamFailure(new ShardsAffectedByTeamFailure) {}
+  : ddEnabledState(new DDEnabledState), ddId(id) {}
 
 DDSharedContext::~DDSharedContext() = default;
