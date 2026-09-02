@@ -197,9 +197,6 @@ Future<Void> trackShardMetrics(DataDistributionTracker::SafeAccessor self,
 			std::tie(bounds, readHotShard) = calculateShardSizeBounds(keys, shardMetrics, bandwidthStatus);
 
 			if (readHotShard) {
-				// TraceEvent("RHDTriggerReadHotLoggingForShard")
-				//     .detail("ShardBegin", keys.begin.printable().c_str())
-				//     .detail("ShardEnd", keys.end.printable().c_str());
 				self()->readHotShard.send(keys);
 			}
 
@@ -480,10 +477,6 @@ Future<Void> shardSplitter(DataDistributionTracker* self,
 
 	Standalone<VectorRef<KeyRef>> splitKeys =
 	    co_await self->db->splitStorageMetrics(keys, splitMetrics, metrics, SERVER_KNOBS->MIN_SHARD_BYTES);
-	// fprintf(stderr, "split keys:\n");
-	// for( int i = 0; i < splitKeys.size(); i++ ) {
-	//	fprintf(stderr, "   %s\n", printable(splitKeys[i]).c_str());
-	//}
 	int numShards = splitKeys.size() - 1;
 
 	TraceEvent("RelocateShardStartSplit", self->distributorId)
@@ -870,18 +863,6 @@ Future<Void> shardEvaluator(DataDistributionTracker* self,
 			onChange = onChange || self->anyZeroHealthyTeams->onChange();
 		}
 	}
-
-	// TraceEvent("EdgeCaseTraceShardEvaluator", self->distributorId)
-	//     .detail("BeginKey", keys.begin.printable())
-	//     .detail("EndKey", keys.end.printable())
-	//     .detail("ShouldSplit", shouldSplit)
-	//     .detail("ShouldMerge", shouldMerge)
-	//     .detail("HasBeenTrueLongEnough", wantsToMerge->hasBeenTrueForLongEnough())
-	//     .detail("CurrentMetrics", stats.toString())
-	//     .detail("ShardBoundsMaxBytes", shardBounds.max.bytes)
-	//     .detail("ShardBoundsMinBytes", shardBounds.min.bytes)
-	//     .detail("WriteBandwitdhStatus", bandwidthStatus)
-	//     .detail("SplitBecauseHighWriteBandWidth", writeSplit ? "Yes" : "No");
 
 	if (!self->anyZeroHealthyTeams->get() && wantsToMerge->hasBeenTrueForLongEnough()) {
 		onChange = onChange || shardMerger(self, keys, shardSize);
@@ -2052,13 +2033,7 @@ bool PhysicalShardCollection::physicalShardExists(uint64_t physicalShardID) {
 TEST_CASE("/DataDistributor/Tracker/FetchTopK") {
 	DataDistributionTracker self;
 	std::vector<KeyRange> ranges;
-	// for (int i = 1; i <= 10; i += 2) {
-	//     ranges.emplace_back(KeyRangeRef(doubleToTestKey(i), doubleToTestKey(i + 2)));
-	//     std::cout << "add range: " << ranges.back().begin.toString() << "\n";
-	// }
 	GetTopKMetricsRequest req(ranges, 3, 1000, 100000);
-
-	// double targetDensities[10] = { 2, 1, 3, 5, 4, 10, 6, 8, 7, 0 };
 
 	co_await fetchTopKShardMetrics(&self, req);
 	auto& reply = req.reply.getFuture().get();
