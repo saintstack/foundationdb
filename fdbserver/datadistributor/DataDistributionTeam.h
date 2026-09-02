@@ -39,8 +39,11 @@ public:
 	// set the count of type to 0
 	void reset(Type type);
 
-	// return the minimal count of a combined eligible type
-	int getCount(int combinedType) const;
+	// Returns the minimal count across the types set in combinedType, or
+	// std::numeric_limits<unsigned>::max() if none of them has been surveyed yet. That sentinel keeps
+	// "not yet measured" distinct from "measured zero", so an un-surveyed team is not excluded on no
+	// evidence. Callers are responsible for screening out combinedType == NONE.
+	unsigned getCount(int combinedType) const;
 
 	// increase the count of type
 	void increase(Type type);

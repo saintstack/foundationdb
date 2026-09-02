@@ -125,11 +125,15 @@ class DDTxnProcessorImpl {
 	                                                                                                KeyRangeRef range) {
 		std::vector<IDDTxnProcessor::DDRangeLocations> res;
 		Transaction tr(cx);
-		tr.setOption(FDBTransactionOptions::READ_SYSTEM_KEYS);
-		tr.setOption(FDBTransactionOptions::READ_LOCK_AWARE);
-		tr.setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
 
 		while (true) {
+			// Re-applied every attempt: Transaction::onError resets the transaction, and
+			// TransactionState::cloneAndReset only carries options forward below API version 16. Set once
+			// outside the loop, a retry would read keyServersPrefix without READ_SYSTEM_KEYS and fail this
+			// future non-retryably.
+			tr.setOption(FDBTransactionOptions::READ_SYSTEM_KEYS);
+			tr.setOption(FDBTransactionOptions::READ_LOCK_AWARE);
+			tr.setOption(FDBTransactionOptions::PRIORITY_SYSTEM_IMMEDIATE);
 			res.clear();
 			Error err;
 			try {

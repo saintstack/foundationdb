@@ -64,7 +64,13 @@ public:
 
 	double getAverage() {
 		if (now() - interval <= previousPopTime) { // struct is just initialized Or pop() due to full
-			return (total - previous) / (now() - previousPopTime);
+			// Guard elapsed == 0: called in the same tick as construction (or as the pop that last set
+			// previousPopTime), this would divide by 0.0 and report the rate as NaN.
+			double elapsed = now() - previousPopTime;
+			if (elapsed <= 0) {
+				return 0;
+			}
+			return (total - previous) / elapsed;
 		} else {
 			while (!updates.empty() && updates.front().first < now() - interval) {
 				pop();

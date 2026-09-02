@@ -66,7 +66,11 @@ void EligibilityCounter::reset(Type type) {
 	type_count[type] = 0;
 }
 
-int EligibilityCounter::getCount(int combinedType) const {
+unsigned EligibilityCounter::getCount(int combinedType) const {
+	// A type absent from type_count means updateTeamEligibility() has not surveyed this team yet, as
+	// opposed to having surveyed it and found zero. Those cases must stay distinguishable: the sentinel
+	// below makes an un-surveyed team pass the eligibility filters rather than be excluded on no
+	// evidence. Callers screen out combinedType == NONE themselves.
 	unsigned minCount = std::numeric_limits<unsigned>::max();
 	for (auto& [t, c] : type_count) {
 		if ((combinedType & t) > 0 && minCount > c) {
@@ -730,11 +734,11 @@ public:
 
 			if (!bestOption.present() && (req.storageQueueAware || req.wantTrueBestIfMoveout)) {
 				// re-run getTeam without storageQueueAware and wantTrueBestIfMoveout
-				req.storageQueueAware = false;
-				req.wantTrueBestIfMoveout = false;
 				TraceEvent(SevWarn, "GetTeamRetry", self->distributorId)
 				    .detail("OldStorageQueueAware", req.storageQueueAware)
 				    .detail("OldWantTrueBestIfMoveout", req.wantTrueBestIfMoveout);
+				req.storageQueueAware = false;
+				req.wantTrueBestIfMoveout = false;
 				co_await getTeam(self, req);
 			} else {
 				req.reply.send(std::make_pair(bestOption, foundSrc));
@@ -1168,6 +1172,11 @@ public:
 					team->setWrongConfiguration(anyWrongConfiguration);
 
 					if (trackHealthyTeam) {
+						// Captured before the updates below, so the "Last*" fields in
+						// ServerTeamHealthDifference report the previous verdict rather than the new one.
+						const bool prevOptimal = lastOptimal;
+						const bool prevHealthy = lastHealthy;
+
 						if (optimal != lastOptimal) {
 							lastOptimal = optimal;
 							self->optimalTeamCount += optimal ? 1 : -1;
@@ -1194,8 +1203,8 @@ public:
 							if (logTeamEvents) {
 								TraceEvent("ServerTeamHealthDifference", self->distributorId)
 								    .detail("ServerTeam", team->getDesc())
-								    .detail("LastOptimal", lastOptimal)
-								    .detail("LastHealthy", lastHealthy)
+								    .detail("LastOptimal", prevOptimal)
+								    .detail("LastHealthy", prevHealthy)
 								    .detail("Optimal", optimal)
 								    .detail("OptimalTeamCount", self->optimalTeamCount);
 							}
@@ -1553,16 +1562,15 @@ public:
 
 				// An invalid wiggle server should set itself the right status. Otherwise, it cannot be re-included by
 				// wiggler.
-				auto invalidWiggleServer =
-				    [](const AddressExclusion& addr, const DDTeamCollection* tc, const TCServerInfo* server) {
-					    return !tc->wigglingId.present() || server->getId() != tc->wigglingId.get();
-				    };
+				auto invalidWiggleServer = [](const DDTeamCollection* tc, const TCServerInfo* server) {
+					return !tc->wigglingId.present() || server->getId() != tc->wigglingId.get();
+				};
 				// If the storage server is in the excluded servers list, it is undesired
 				NetworkAddress a = server->getLastKnownInterface().address();
 				AddressExclusion worstAddr(a.ip, a.port);
 				DDTeamCollection::Status worstStatus = self->excludedServers.get(worstAddr);
 
-				if (worstStatus == DDTeamCollection::Status::WIGGLING && invalidWiggleServer(worstAddr, self, server)) {
+				if (worstStatus == DDTeamCollection::Status::WIGGLING && invalidWiggleServer(self, server)) {
 					TraceEvent(SevInfo, "InvalidWiggleServer", self->distributorId)
 					    .detail("Address", worstAddr.toString())
 					    .detail("ServerId", server->getId())
@@ -1587,10 +1595,9 @@ public:
 					}
 					DDTeamCollection::Status testStatus = self->excludedServers.get(testAddr);
 
-					if (testStatus == DDTeamCollection::Status::WIGGLING &&
-					    invalidWiggleServer(testAddr, self, server)) {
+					if (testStatus == DDTeamCollection::Status::WIGGLING && invalidWiggleServer(self, server)) {
 						TraceEvent(SevInfo, "InvalidWiggleServer", self->distributorId)
-						    .detail("Address", worstAddr.toString())
+						    .detail("Address", testAddr.toString())
 						    .detail("ServerId", server->getId())
 						    .detail("WigglingId", self->wigglingId.present() ? self->wigglingId.get().toString() : "");
 						testStatus = DDTeamCollection::Status::NONE;
@@ -2409,9 +2416,9 @@ public:
 			avgShardBytes.reset();
 			self->getAverageShardBytes.send(avgShardBytes);
 			int64_t avgBytes = co_await avgShardBytes.getFuture();
-			double ratio;
+			double ratio = 0;
 			bool imbalance, noMinAvailSpace;
-			int numSSToBeLoadBytesBalanced;
+			int numSSToBeLoadBytesBalanced = 0;
 
 			if (SERVER_KNOBS->PW_MAX_SS_LESSTHAN_MIN_BYTES_BALANCE_RATIO) {
 				// PW_MAX_SS_LESSTHAN_MIN_BYTES_BALANCE_RATIO: Maximum number of storage servers that can
@@ -3871,11 +3878,13 @@ public:
 			    .detail("Size", machine_info.size())
 			    .detail("Primary", self->isPrimary());
 			auto machine = machine_info.begin();
-			bool isMachineHealthy = false;
 			for (i = 0; i < machine_info.size(); i++) {
 				Reference<TCMachineInfo> _machine = machine->second;
 				bool zoneIDFound = machine_info.find(_machine->machineID) != machine_info.end();
 				bool zeroHealthyServersOnMachine = true;
+				// Must be scoped per iteration: a machine with no healthy server would otherwise inherit
+				// the previous machine's verdict and be reported Healthy.
+				bool isMachineHealthy = false;
 				if (!_machine.isValid() || !zoneIDFound || _machine->serversOnMachine.empty()) {
 					isMachineHealthy = false;
 				}

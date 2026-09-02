@@ -1210,6 +1210,7 @@ void triggerStorageQueueRebalance(DataDistributionTracker* self, RebalanceStorag
 					     shardWriteTraffic > SERVER_KNOBS->REBALANCE_STORAGE_QUEUE_SHARD_PER_KSEC_MIN)) {
 						shardToMove = it->range();
 						maxShardWriteTraffic = shardWriteTraffic;
+						selectedTeam = team;
 					}
 				}
 			}

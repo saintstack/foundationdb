@@ -641,6 +641,7 @@ public:
 			co_await self->loadDatabaseConfiguration();
 			self->initDcInfo();
 			TraceEvent("DDInitGotConfiguration", self->ddId)
+			    .setMaxEventLength(-1)
 			    .setMaxFieldLength(-1)
 			    .detail("Conf", self->configuration.toString());
 
@@ -3375,8 +3376,7 @@ Future<Void> sendSnapReq(RequestStream<Req> stream, Req req, Error e) {
 		TraceEvent("SnapDataDistributor_ReqError")
 		    .errorUnsuppressed(reply.getError())
 		    .detail("ConvertedErrorType", e.what())
-		    .detail("Peer", stream.getEndpoint().getPrimaryAddress())
-		    .detail("PeerAddress", stream.getEndpoint().getPrimaryAddress());
+		    .detail("Peer", stream.getEndpoint().getPrimaryAddress());
 		throw e;
 	}
 }
@@ -3390,7 +3390,6 @@ Future<ErrorOr<Void>> trySendSnapReq(RequestStream<WorkerSnapRequest> stream, Wo
 			TraceEvent("SnapDataDistributor_ReqError")
 			    .errorUnsuppressed(reply.getError())
 			    .detail("Peer", stream.getEndpoint().getPrimaryAddress())
-			    .detail("PeerAddress", stream.getEndpoint().getPrimaryAddress())
 			    .detail("Retry", snapReqRetry);
 			if (reply.getError().code() != error_code_request_maybe_delivered ||
 			    ++snapReqRetry > SERVER_KNOBS->SNAP_NETWORK_FAILURE_RETRY_LIMIT)
@@ -5454,7 +5453,10 @@ Future<Void> doAuditLocationMetadata(Reference<DataDistributor> self,
 				// Compare: check if mapFromKeyServers === mapFromServerKeys
 				errors = checkLocationMetadataConsistency(mapFromKeyServers, mapFromServerKeys, claimRange);
 				for (const auto& error : errors) {
-					auto te = TraceEvent(SevError, "DDDoAuditLocationMetadataError", self->ddId);
+					// SevWarnAlways, not SevError: the single summary event below is what fails the run.
+					// Emitting SevError per error would multiply one audit failure into N+1 identically
+					// named failures.
+					auto te = TraceEvent(SevWarnAlways, "DDDoAuditLocationMetadataErrorDetail", self->ddId);
 					te.setMaxFieldLength(-1)
 					    .setMaxEventLength(-1)
 					    .detail("AuditId", audit->coreState.id)

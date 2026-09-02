@@ -170,7 +170,10 @@ static bool shouldYieldDestinationFailureRetry(RelocateData const& retry, Reloca
 
 class ParallelTCInfo final : public ReferenceCounted<ParallelTCInfo>, public IDataDistributionTeam {
 	std::vector<Reference<IDataDistributionTeam>> teams;
-	std::vector<UID> tempServerIDs;
+	// Backing store for the reference getServerIDs() returns; mutable because that accessor is const.
+	// Deliberately a member and not a function-local static: a static would be shared by every
+	// ParallelTCInfo, so one instance's call would invalidate a reference another still holds.
+	mutable std::vector<UID> tempServerIDs;
 
 	template <typename NUM>
 	NUM sum(std::function<NUM(IDataDistributionTeam const&)> func) const {
@@ -227,7 +230,6 @@ public:
 	}
 
 	std::vector<UID> const& getServerIDs() const override {
-		static std::vector<UID> tempServerIDs;
 		tempServerIDs.clear();
 		for (const auto& team : teams) {
 			std::vector<UID> const& childIDs = team->getServerIDs();

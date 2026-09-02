@@ -187,9 +187,10 @@ bool TCServerInfo::updateAndGetStorageQueueTooLong(int64_t currentBytes) {
 	if (currentBytes > SERVER_KNOBS->REBALANCE_STORAGE_QUEUE_LONG_BYTES) {
 		if (!storageQueueTooLongStartTime.present()) {
 			storageQueueTooLongStartTime = currentTime;
+			// No Duration field: this event marks the transition, so the elapsed time is zero by
+			// construction. SSTrackerDetectStorageQueueRemainLong carries the accumulating duration.
 			TraceEvent(SevWarn, "SSTrackerDetectStorageQueueBecomeLong", id)
-			    .detail("StorageQueueBytes", currentBytes)
-			    .detail("Duration", currentTime - storageQueueTooLongStartTime.get());
+			    .detail("StorageQueueBytes", currentBytes);
 		} else {
 			TraceEvent(SevDebug, "SSTrackerDetectStorageQueueRemainLong", id)
 			    .detail("StorageQueueBytes", currentBytes)
