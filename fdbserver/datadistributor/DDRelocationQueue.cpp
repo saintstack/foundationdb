@@ -403,21 +403,6 @@ void Busyness::removeWork(int prio, int work) {
 	addWork(prio, -work);
 }
 
-std::string Busyness::toString() {
-	std::string result;
-	for (int i = 1; i < ledger.size();) {
-		int j = i + 1;
-		while (j < ledger.size() && ledger[i] == ledger[j])
-			j++;
-		if (i != 1)
-			result += ", ";
-		result += i + 1 == j ? format("%03d", i * 100) : format("%03d/%03d", i * 100, (j - 1) * 100);
-		result += format("=%1.02f (%d/%d)", (float)ledger[i] / WORK_FULL_UTILIZATION, ledger[i], WORK_FULL_UTILIZATION);
-		i = j;
-	}
-	return result;
-}
-
 double adjustRelocationParallelismForSrc(double srcParallelism) {
 	double res = srcParallelism;
 	if (SERVER_KNOBS->ENABLE_CONSERVATIVE_RELOCATION_WHEN_REPLICA_CONSISTENCY_CHECK &&
@@ -1005,7 +990,6 @@ void DDQueue::queueRelocation(RelocateShard rs, std::set<UID>& serversToLaunchFr
 void DDQueue::completeSourceFetch(const RelocateData& results) {
 	ASSERT(fetchingSourcesQueue.contains(results));
 
-	// logRelocation( results, "GotSourceServers" );
 
 	fetchingSourcesQueue.erase(results);
 	queueMap.insert(results.keys, results);
@@ -1013,21 +997,6 @@ void DDQueue::completeSourceFetch(const RelocateData& results) {
 		queue[results.src[i]].insert(results);
 	}
 	serverCounter.increaseForTeam(results.src, results.reason, ServerCounter::CountType::QueuedSource);
-}
-
-void DDQueue::logRelocation(const RelocateData& rd, const char* title) {
-	std::string busyString;
-	for (int i = 0; i < rd.src.size() && i < teamSize * 2; i++)
-		busyString += describe(rd.src[i]) + " - (" + busymap[rd.src[i]].toString() + "); ";
-
-	TraceEvent(title, distributorId)
-	    .detail("KeyBegin", rd.keys.begin)
-	    .detail("KeyEnd", rd.keys.end)
-	    .detail("Priority", rd.priority)
-	    .detail("WorkFactor", rd.workFactor)
-	    .detail("SourceServerCount", rd.src.size())
-	    .detail("SourceServers", describe(rd.src, teamSize * 2))
-	    .detail("SourceBusyness", busyString);
 }
 
 void DDQueue::launchQueuedWork(KeyRange keys, const DDEnabledState* ddEnabledState) {
@@ -1164,7 +1133,6 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 
 		if (overlappingInFlight) {
 			ASSERT(!rd.isRestore());
-			// logRelocation( rd, "SkippingOverlappingInFlight" );
 			continue;
 		}
 
@@ -1183,7 +1151,6 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 		// queue
 		// FIXME: we need spare capacity even when we're just going to be cancelling work via TEAM_HEALTHY
 		if (!rd.isRestore() && !canLaunchSrc(rd, teamSize, singleRegionTeamSize, busymap, cancellableRelocations)) {
-			// logRelocation( rd, "SkippingQueuedRelocation" );
 			if (rd.bulkLoadTask.present()) {
 				TraceEvent(SevError, "DDBulkLoadTaskDelayedByBusySrc", this->distributorId)
 				    .detail("TaskID", rd.bulkLoadTask.get().coreState.getTaskId())
@@ -1196,7 +1163,6 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 		// From now on, the source servers for the RelocateData rd have enough resource to move the data away,
 		// because they do not have too much inflight data movement.
 
-		// logRelocation( rd, "LaunchingRelocation" );
 		DebugRelocationTraceEvent(rd.interval.end(), distributorId).detail("Result", "Success");
 
 		if (!rd.isRestore()) {
@@ -1296,7 +1262,6 @@ void DDQueue::launchQueuedWork(std::set<RelocateData, std::greater<RelocateData>
 			inFlightActors.insert(rrs.keys, dataDistributionRelocator(this, rrs, fCleanup, ddEnabledState));
 		}
 
-		// logRelocation( rd, "LaunchedRelocation" );
 	}
 	if (now() - startTime > .001 && deterministicRandom()->random01() < 0.001)
 		TraceEvent(SevWarnAlways, "LaunchingQueueSlowx1000").detail("Elapsed", now() - startTime);
@@ -3057,7 +3022,6 @@ struct DDQueueImpl {
 			co_await state->queueMutationLock.take(TaskPriority::DataDistributionLaunch);
 			FlowLock::Releaser lockGuard(state->queueMutationLock);
 			state->self->processRelocationComplete(done);
-			// self->logRelocation( done, "ShardRelocatorDone" );
 			auto scheduleRangesComplete = [&](KeyRange keys) {
 				state->self->noErrorActors.add(
 				    tag(delay(0, TaskPriority::DataDistributionLaunch), keys, state->rangesComplete));

@@ -92,7 +92,6 @@ struct Busyness {
 	bool canLaunch(int prio, int work) const;
 	void addWork(int prio, int work);
 	void removeWork(int prio, int work);
-	std::string toString();
 };
 
 struct DDQueueInitParams {
@@ -331,7 +330,6 @@ public:
 
 	void completeSourceFetch(const RelocateData& results);
 
-	void logRelocation(const RelocateData& rd, const char* title);
 
 	void launchQueuedWork(KeyRange keys, const DDEnabledState* ddEnabledState);
 
