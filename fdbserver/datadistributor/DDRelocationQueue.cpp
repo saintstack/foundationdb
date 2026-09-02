@@ -721,46 +721,6 @@ void DDQueue::validate() {
 				    .detail("Problem", "relocates in the fetching queue are in the queueMap");
 		}
 
-		/*
-		for( auto it = queue.begin(); it != queue.end(); ++it ) {
-		    for( auto rdit = it->second.begin(); rdit != it->second.end(); ++rdit ) {
-		        // relocates in the queue are in the queueMap exactly.
-		        auto range = queueMap.rangeContaining( rdit->keys.begin );
-		        if( range.value() != *rdit || range.range() != rdit->keys )
-		            TraceEvent(SevError, "DDQueueValidateError4").detail("Problem", "relocates in the queue are in the queueMap exactly")
-		            .detail("RangeBegin", range.range().begin)
-		            .detail("RangeEnd", range.range().end)
-		            .detail("RelocateBegin2", range.value().keys.begin)
-		            .detail("RelocateEnd2", range.value().keys.end)
-		            .detail("RelocateStart", range.value().startTime)
-		            .detail("MapStart", rdit->startTime)
-		            .detail("RelocateWork", range.value().workFactor)
-		            .detail("MapWork", rdit->workFactor)
-		            .detail("RelocateSrc", range.value().src.size())
-		            .detail("MapSrc", rdit->src.size())
-		            .detail("RelocatePrio", range.value().priority)
-		            .detail("MapPrio", rdit->priority);
-
-		        // relocates in the queue have src servers
-		        if( !rdit->src.size() )
-		            TraceEvent(SevError, "DDQueueValidateError5").detail("Problem", "relocates in the queue have src servers");
-
-		        // relocates in the queue do not have a work factor yet.
-		        if( rdit->workFactor != 0.0 )
-		            TraceEvent(SevError, "DDQueueValidateError6").detail("Problem", "relocates in the queue do not have a work factor yet");
-
-		        bool contains = false;
-		        for( int i = 0; i < rdit->src.size(); i++ ) {
-		            if( rdit->src[i] == it->first ) {
-		                contains = true;
-		                break;
-		            }
-		        }
-		        if( !contains )
-		            TraceEvent(SevError, "DDQueueValidateError7").detail("Problem", "queued relocate data does not include ss under which its filed");
-		    }
-		}*/
-
 		auto inFlightRanges = inFlight.ranges();
 		for (auto it = inFlightRanges.begin(); it != inFlightRanges.end(); ++it) {
 			for (int i = 0; i < it->value().src.size(); i++) {
