@@ -21,24 +21,8 @@
 #define FOUNDATIONDB_DDSHARDTRACKER_H
 #include "DataDistribution.h"
 
-// send request/signal to DDTracker through interface
-// call synchronous method from components outside DDShardTracker
-class IDDShardTracker {
-public:
-	Promise<Void> readyToStart;
-	FutureStream<GetMetricsRequest> getShardMetrics;
-	FutureStream<GetTopKMetricsRequest> getTopKMetrics;
-	FutureStream<GetMetricsListRequest> getShardMetricsList;
-	FutureStream<Promise<int64_t>> averageShardBytes;
-	FutureStream<RebalanceStorageQueueRequest> triggerStorageQueueRebalance;
-	FutureStream<BulkLoadShardRequest> triggerShardBulkLoading;
-
-	virtual double getAverageShardBytes() = 0;
-	virtual ~IDDShardTracker() = default;
-};
-
 struct DataDistributionTrackerInitParams {
-	Reference<IDDTxnProcessor> db;
+	Reference<DDTxnProcessor> db;
 	UID const& distributorId;
 	Promise<Void> const& readyToStart;
 	PromiseStream<RelocateShard> const& output;
@@ -52,11 +36,11 @@ struct DataDistributionTrackerInitParams {
 };
 
 // track the status of shards
-class DataDistributionTracker : public IDDShardTracker, public ReferenceCounted<DataDistributionTracker> {
+class DataDistributionTracker : public ReferenceCounted<DataDistributionTracker> {
 public:
 	friend struct DataDistributionTrackerImpl;
 
-	Reference<IDDTxnProcessor> db;
+	Reference<DDTxnProcessor> db;
 	UID distributorId;
 
 	// At now, the lifetime of shards is guaranteed longer than DataDistributionTracker.
@@ -82,6 +66,14 @@ public:
 
 	Promise<Void> readyToStart;
 	Reference<AsyncVar<bool>> anyZeroHealthyTeams;
+
+	// Inbound request streams, wired up by run().
+	FutureStream<GetMetricsRequest> getShardMetrics;
+	FutureStream<GetTopKMetricsRequest> getTopKMetrics;
+	FutureStream<GetMetricsListRequest> getShardMetricsList;
+	FutureStream<Promise<int64_t>> averageShardBytes;
+	FutureStream<RebalanceStorageQueueRequest> triggerStorageQueueRebalance;
+	FutureStream<BulkLoadShardRequest> triggerShardBulkLoading;
 
 	// Read hot detection
 	PromiseStream<KeyRange> readHotShard;
@@ -118,9 +110,9 @@ public:
 
 	DataDistributionTracker() = default;
 
-	~DataDistributionTracker() override;
+	~DataDistributionTracker();
 
-	double getAverageShardBytes() override { return maxShardSize->get().get() / 2.0; }
+	double getAverageShardBytes() { return maxShardSize->get().get() / 2.0; }
 
 	static Future<Void> run(Reference<DataDistributionTracker> self,
 	                        Reference<InitialDataDistribution> const& initData,

@@ -1233,7 +1233,7 @@ void triggerStorageQueueRebalance(DataDistributionTracker* self, RebalanceStorag
 }
 
 DataDistributionTracker::DataDistributionTracker(DataDistributionTrackerInitParams const& params)
-  : IDDShardTracker(), db(params.db), distributorId(params.distributorId), shards(params.shards), actors(false),
+  : db(params.db), distributorId(params.distributorId), shards(params.shards), actors(false),
     systemSizeEstimate(0), dbSizeEstimate(new AsyncVar<int64_t>()), maxShardSize(new AsyncVar<Optional<int64_t>>()),
     output(params.output), shardsAffectedByTeamFailure(params.shardsAffectedByTeamFailure),
     physicalShardCollection(params.physicalShardCollection), bulkLoadTaskCollection(params.bulkLoadTaskCollection),
@@ -1373,7 +1373,7 @@ Future<Void> DataDistributionTracker::run(
 // Tracks storage metrics for `keys` and updates `physicalShardStats` which is the stats for the physical shard owning
 // this key range. This function is similar to `trackShardMetrics()` and altered for physical shard. This meant to be
 // temporary. Eventually, we want a new interface to track physical shard metrics more efficiently.
-Future<Void> trackKeyRangeInPhysicalShardMetrics(Reference<IDDTxnProcessor> db,
+Future<Void> trackKeyRangeInPhysicalShardMetrics(Reference<DDTxnProcessor> db,
                                                  KeyRange keys,
                                                  Reference<AsyncVar<Optional<ShardMetrics>>> shardMetrics,
                                                  Reference<AsyncVar<Optional<StorageMetrics>>> physicalShardStats) {

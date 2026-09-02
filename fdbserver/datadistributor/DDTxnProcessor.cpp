@@ -66,7 +66,7 @@ class DDTxnProcessorImpl {
 	}
 
 	// return {sourceServers, completeSources}
-	static Future<IDDTxnProcessor::SourceServers> getSourceServersForRange(Database cx, KeyRangeRef keys) {
+	static Future<DDTxnProcessor::SourceServers> getSourceServersForRange(Database cx, KeyRangeRef keys) {
 		std::set<UID> servers;
 		std::vector<UID> completeSources;
 		Transaction tr(cx);
@@ -118,12 +118,12 @@ class DDTxnProcessorImpl {
 			co_await tr.onError(err);
 		}
 
-		co_return IDDTxnProcessor::SourceServers{ std::vector<UID>(servers.begin(), servers.end()), completeSources };
+		co_return DDTxnProcessor::SourceServers{ std::vector<UID>(servers.begin(), servers.end()), completeSources };
 	}
 
-	static Future<std::vector<IDDTxnProcessor::DDRangeLocations>> getSourceServerInterfacesForRange(Database cx,
+	static Future<std::vector<DDTxnProcessor::DDRangeLocations>> getSourceServerInterfacesForRange(Database cx,
 	                                                                                                KeyRangeRef range) {
-		std::vector<IDDTxnProcessor::DDRangeLocations> res;
+		std::vector<DDTxnProcessor::DDRangeLocations> res;
 		Transaction tr(cx);
 
 		while (true) {
@@ -160,7 +160,7 @@ class DDTxnProcessorImpl {
 						serverListEntries.push_back(tr.get(serverListKeyFor(src[j])));
 					}
 					std::vector<Optional<Value>> serverListValues = co_await getAll(serverListEntries);
-					IDDTxnProcessor::DDRangeLocations current(KeyRangeRef(shards[i].key, shards[i + 1].key));
+					DDTxnProcessor::DDRangeLocations current(KeyRangeRef(shards[i].key, shards[i + 1].key));
 					for (int j = 0; j < serverListValues.size(); ++j) {
 						if (!serverListValues[j].present()) {
 							TraceEvent(SevWarnAlways, "GetSourceServerInterfacesMissing")
@@ -890,11 +890,11 @@ Future<Void> DDTxnProcessor::waitForAllDataRemoved(
 	return DDTxnProcessorImpl::waitForAllDataRemoved(cx, serverID, addedVersion, shardsAffectedByTeamFailure);
 }
 
-Future<IDDTxnProcessor::SourceServers> DDTxnProcessor::getSourceServersForRange(const KeyRangeRef range) {
+Future<DDTxnProcessor::SourceServers> DDTxnProcessor::getSourceServersForRange(const KeyRangeRef range) {
 	return DDTxnProcessorImpl::getSourceServersForRange(cx, range);
 }
 
-Future<std::vector<IDDTxnProcessor::DDRangeLocations>> DDTxnProcessor::getSourceServerInterfacesForRange(
+Future<std::vector<DDTxnProcessor::DDRangeLocations>> DDTxnProcessor::getSourceServerInterfacesForRange(
     const KeyRangeRef range) {
 	return DDTxnProcessorImpl::getSourceServerInterfacesForRange(cx, range);
 }

@@ -616,14 +616,14 @@ Future<Void> getSourceServersForRange(DDQueue* self,
 	co_await fetchLock->take(TaskPriority::DataDistributionLaunch);
 	FlowLock::Releaser releaser(*fetchLock);
 
-	IDDTxnProcessor::SourceServers res = co_await self->txnProcessor->getSourceServersForRange(input.keys);
+	DDTxnProcessor::SourceServers res = co_await self->txnProcessor->getSourceServersForRange(input.keys);
 	input.src = std::move(res.srcServers);
 	input.completeSources = std::move(res.completeSources);
 	output.send(input);
 }
 
 DDQueue::DDQueue(DDQueueInitParams const& params)
-  : IDDRelocationQueue(), distributorId(params.id), lock(params.lock), txnProcessor(params.db),
+  : distributorId(params.id), lock(params.lock), txnProcessor(params.db),
     teamCollections(params.teamCollections), shardsAffectedByTeamFailure(params.shardsAffectedByTeamFailure),
     physicalShardCollection(params.physicalShardCollection), bulkLoadTaskCollection(params.bulkLoadTaskCollection),
     getAverageShardBytes(params.getAverageShardBytes),
@@ -2839,7 +2839,7 @@ Future<bool> DDQueue::rebalanceTeams(DataMovementReason moveReason,
 	return ::rebalanceTeams(this, moveReason, sourceTeam, destTeam, primary, traceEvent);
 }
 
-Future<bool> getSkipRebalanceValue(Reference<IDDTxnProcessor> txnProcessor, bool readRebalance) {
+Future<bool> getSkipRebalanceValue(Reference<DDTxnProcessor> txnProcessor, bool readRebalance) {
 	Optional<Value> val = co_await txnProcessor->readRebalanceDDIgnoreKey();
 
 	if (!val.present())

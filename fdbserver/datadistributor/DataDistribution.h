@@ -252,7 +252,7 @@ FDB_BOOLEAN_PARAM(MoveKeyRangeOutPhysicalShard);
 class PhysicalShardCollection : public ReferenceCounted<PhysicalShardCollection> {
 public:
 	PhysicalShardCollection() : lastTransitionStartTime(now()), requireTransition(false) {}
-	explicit(false) PhysicalShardCollection(Reference<IDDTxnProcessor> db)
+	explicit(false) PhysicalShardCollection(Reference<DDTxnProcessor> db)
 	  : txnProcessor(db), lastTransitionStartTime(now()), requireTransition(false) {}
 
 	enum class PhysicalShardCreationTime { DDInit, DDRelocator };
@@ -260,7 +260,7 @@ public:
 	struct PhysicalShard {
 		PhysicalShard() : id(UID().first()) {}
 
-		PhysicalShard(Reference<IDDTxnProcessor> txnProcessor,
+		PhysicalShard(Reference<DDTxnProcessor> txnProcessor,
 		              uint64_t id,
 		              StorageMetrics const& metrics,
 		              std::vector<ShardsAffectedByTeamFailure::Team> teams,
@@ -276,7 +276,7 @@ public:
 
 		std::string toString() const { return fmt::format("{}", std::to_string(id)); }
 
-		Reference<IDDTxnProcessor> txnProcessor;
+		Reference<DDTxnProcessor> txnProcessor;
 		uint64_t id; // physical shard id (never changed)
 		StorageMetrics metrics; // current metrics, updated by shardTracker
 		// todo(zhewu): combine above metrics with stats. They are redundant.
@@ -429,7 +429,7 @@ private:
 
 	inline bool requireTransitionCheck() { return requireTransition; }
 
-	Reference<IDDTxnProcessor> txnProcessor;
+	Reference<DDTxnProcessor> txnProcessor;
 
 	// Core data structures
 	// Physical shard instances indexed by physical shard id

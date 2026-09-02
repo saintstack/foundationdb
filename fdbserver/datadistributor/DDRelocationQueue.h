@@ -25,15 +25,6 @@
 #include "DataDistribution.h"
 #include "MovingWindow.h"
 
-// send request/signal to DDRelocationQueue through interface
-// call synchronous method from components outside DDRelocationQueue
-class IDDRelocationQueue {
-public:
-	virtual int getUnhealthyRelocationCount() const = 0;
-	virtual ~IDDRelocationQueue() = default;
-	;
-};
-
 // DDQueue use RelocateData to track proposed movements
 class RelocateData {
 	// If this rs comes from a splitting, parent range is the original range.
@@ -107,7 +98,7 @@ struct Busyness {
 struct DDQueueInitParams {
 	UID const& id;
 	MoveKeysLock const& lock;
-	Reference<IDDTxnProcessor> db;
+	Reference<DDTxnProcessor> db;
 	std::vector<TeamCollectionInterface> const& teamCollections;
 	Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure;
 	Reference<PhysicalShardCollection> physicalShardCollection;
@@ -122,7 +113,7 @@ struct DDQueueInitParams {
 };
 
 // DDQueue receives RelocateShard from any other DD components and schedules the actual movements
-class DDQueue : public IDDRelocationQueue, public ReferenceCounted<DDQueue> {
+class DDQueue : public ReferenceCounted<DDQueue> {
 	const DDEnabledState* ddEnabledState = nullptr;
 
 public:
@@ -239,7 +230,7 @@ public:
 	UID distributorId;
 	MoveKeysLock lock;
 	// Should always use txnProcessor to access Database object
-	Reference<IDDTxnProcessor> txnProcessor;
+	Reference<DDTxnProcessor> txnProcessor;
 
 	std::vector<TeamCollectionInterface> teamCollections;
 	Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure;
@@ -368,7 +359,7 @@ public:
 
 	Future<Void> periodicalRefreshCounter();
 
-	int getUnhealthyRelocationCount() const override;
+	int getUnhealthyRelocationCount() const;
 
 	// Simulation-only test hook, off by default (BULKLOAD_SIM_INJECT_DEST_TEAM_FAILURES). A team rarely
 	// goes unhealthy inside the window a bulkload move is in flight, so the retry and give-up paths need

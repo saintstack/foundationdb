@@ -40,8 +40,18 @@ struct ServerWorkerInfos {
 	Optional<Version> readVersion; // the read version of the txn reading server lists
 };
 
-// The DataDistributor uses this interface to interact with the data plane and run database transactions.
-class IDDTxnProcessor : public ReferenceCounted<IDDTxnProcessor> {
+class DDTxnProcessorImpl;
+
+// How the DataDistributor reaches the data plane: every transaction DD runs against the cluster goes
+// through here.
+//
+// Only the four methods the unit tests stub out are virtual: getServerListAndProcessClasses,
+// waitStorageMetrics, splitStorageMetrics and waitForAllDataRemoved. Anything else needing a test seam
+// should be made virtual at that point; there is no reason to pay for a vtable entry until then.
+class DDTxnProcessor : public ReferenceCounted<DDTxnProcessor> {
+	friend class DDTxnProcessorImpl;
+	Database cx;
+
 public:
 	struct SourceServers {
 		std::vector<UID> srcServers, completeSources; // the same as RelocateData.src, RelocateData.completeSources;
@@ -56,183 +66,95 @@ public:
 		KeyRange range;
 	};
 
-	virtual Database context() const = 0;
+	// Leaves cx null, so only the virtual methods below are safe to call. Exists for test subclasses
+	// that stub those out and never touch the database.
+	DDTxnProcessor() = default;
+	explicit DDTxnProcessor(Database cx) : cx(cx) {}
+	virtual ~DDTxnProcessor() = default;
+
+	Database context() const { return cx; };
+
 	// get the source server list and complete source server list for range
-	virtual Future<SourceServers> getSourceServersForRange(const KeyRangeRef range) = 0;
+	Future<SourceServers> getSourceServersForRange(const KeyRangeRef range);
 
-	virtual Future<std::vector<DDRangeLocations>> getSourceServerInterfacesForRange(const KeyRangeRef range) {
-		return std::vector<DDRangeLocations>();
-	}
-
-	virtual Future<Void> waitForAllDataRemoved(
-	    const UID& serverID,
-	    const Version& addedVersion,
-	    Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure) const = 0;
+	Future<std::vector<DDRangeLocations>> getSourceServerInterfacesForRange(const KeyRangeRef range);
 
 	// get the storage server list and Process class, only throw transaction non-retryable exceptions
-	virtual Future<ServerWorkerInfos> getServerListAndProcessClasses() = 0;
+	virtual Future<ServerWorkerInfos> getServerListAndProcessClasses();
 
-	virtual Future<Reference<InitialDataDistribution>> getInitialDataDistribution(
-	    const UID& distributorId,
-	    const MoveKeysLock& moveKeysLock,
-	    const std::vector<Optional<Key>>& remoteDcIds,
-	    const DDEnabledState* ddEnabledState,
-	    SkipDDModeCheck skipDDModeCheck) = 0;
+	Future<Reference<InitialDataDistribution>> getInitialDataDistribution(const UID& distributorId,
+	                                                                      const MoveKeysLock& moveKeysLock,
+	                                                                      const std::vector<Optional<Key>>& remoteDcIds,
+	                                                                      const DDEnabledState* ddEnabledState,
+	                                                                      SkipDDModeCheck skipDDModeCheck);
 
-	virtual ~IDDTxnProcessor() = default;
+	[[nodiscard]] Future<MoveKeysLock> takeMoveKeysLock(UID const& ddId) const;
 
-	[[nodiscard]] virtual Future<MoveKeysLock> takeMoveKeysLock(const UID& ddId) const { return MoveKeysLock(); }
+	Future<DatabaseConfiguration> getDatabaseConfiguration() const;
 
-	virtual Future<DatabaseConfiguration> getDatabaseConfiguration() const = 0;
+	Future<Void> updateReplicaKeys(const std::vector<Optional<Key>>& primaryIds,
+	                               const std::vector<Optional<Key>>& remoteIds,
+	                               const DatabaseConfiguration& configuration) const;
 
-	virtual Future<Void> updateReplicaKeys(const std::vector<Optional<Key>>& primaryIds,
-	                                       const std::vector<Optional<Key>>& remoteIds,
-	                                       const DatabaseConfiguration& configuration) const {
-		return Void();
-	}
+	Future<int> tryUpdateReplicasKeyForDc(const Optional<Key>& dcId, const int& storageTeamSize) const;
 
-	virtual Future<int> tryUpdateReplicasKeyForDc(const Optional<Key>& dcId, const int& storageTeamSize) const {
-		return storageTeamSize;
-	}
+	Future<Void> waitForDataDistributionEnabled(const DDEnabledState* ddEnabledState) const;
 
-	virtual Future<Void> waitForDataDistributionEnabled(const DDEnabledState* ddEnabledState) const { return Void(); };
+	Future<bool> isDataDistributionEnabled(const DDEnabledState* ddEnabledState) const;
 
-	virtual Future<bool> isDataDistributionEnabled(const DDEnabledState* ddEnabledState) const {
-		return ddEnabledState->isEnabled();
-	};
-
-	virtual Future<Void> pollMoveKeysLock(const MoveKeysLock& lock, const DDEnabledState* ddEnabledState) const = 0;
+	Future<Void> pollMoveKeysLock(const MoveKeysLock& lock, const DDEnabledState* ddEnabledState) const;
 
 	// Remove the server from shardMapping and set serverKeysFalse to the server's serverKeys list.
 	// Changes to keyServer and serverKey must happen symmetrically in this function.
 	// If serverID is the last source server for a shard, the shard will be erased, and then be assigned
 	// to teamForDroppedRange.
 	// It's used by `exclude failed` command to bypass data movement from failed server.
-	virtual Future<Void> removeKeysFromFailedServer(const UID& serverID,
-	                                                const std::vector<UID>& teamForDroppedRange,
-	                                                const MoveKeysLock& lock,
-	                                                const DDEnabledState* ddEnabledState) const = 0;
-	virtual Future<Void> removeStorageServer(const UID& serverID,
-	                                         const Optional<UID>& tssPairID,
-	                                         const MoveKeysLock& lock,
-	                                         const DDEnabledState* ddEnabledState) const = 0;
-
-	virtual Future<Void> moveKeys(const MoveKeysParams& params) = 0;
-
-	// metrics.second is the number of key-ranges (i.e., shards) in the 'keys' key-range
-	virtual Future<std::pair<Optional<StorageMetrics>, int>> waitStorageMetrics(KeyRange const& keys,
-	                                                                            StorageMetrics const& min,
-	                                                                            StorageMetrics const& max,
-	                                                                            StorageMetrics const& permittedError,
-	                                                                            int shardLimit,
-	                                                                            int expectedShardCount) const = 0;
-
-	virtual Future<Standalone<VectorRef<KeyRef>>> splitStorageMetrics(
-	    KeyRange const& keys,
-	    StorageMetrics const& limit,
-	    StorageMetrics const& estimated,
-	    Optional<int> const& minSplitBytes = {}) const = 0;
-
-	virtual Future<Standalone<VectorRef<ReadHotRangeWithMetrics>>> getReadHotRanges(KeyRange const& keys) const = 0;
-
-	virtual Future<HealthMetrics> getHealthMetrics(bool detailed = false) const = 0;
-
-	virtual Future<Optional<Value>> readRebalanceDDIgnoreKey() const = 0;
-
-	virtual Future<Void> waitDDTeamInfoPrintSignal() const { return Never(); }
-
-	virtual Future<std::vector<ProcessData>> getWorkers() const = 0;
-
-	virtual Future<Optional<HealthMetrics::StorageStats>> getStorageStats(const UID& id, double maxStaleness) const = 0;
-};
-
-class DDTxnProcessorImpl;
-
-// run transactions over real database
-class DDTxnProcessor : public IDDTxnProcessor {
-	friend class DDTxnProcessorImpl;
-	Database cx;
-
-public:
-	DDTxnProcessor() = default;
-	explicit DDTxnProcessor(Database cx) : cx(cx) {}
-
-	Database context() const override { return cx; };
-
-	Future<SourceServers> getSourceServersForRange(const KeyRangeRef range) override;
-
-	Future<std::vector<IDDTxnProcessor::DDRangeLocations>> getSourceServerInterfacesForRange(
-	    const KeyRangeRef range) override;
-
-	// Call NativeAPI implementation directly
-	Future<ServerWorkerInfos> getServerListAndProcessClasses() override;
-
-	Future<Reference<InitialDataDistribution>> getInitialDataDistribution(const UID& distributorId,
-	                                                                      const MoveKeysLock& moveKeysLock,
-	                                                                      const std::vector<Optional<Key>>& remoteDcIds,
-	                                                                      const DDEnabledState* ddEnabledState,
-	                                                                      SkipDDModeCheck skipDDModeCheck) override;
-
-	Future<MoveKeysLock> takeMoveKeysLock(UID const& ddId) const override;
-
-	Future<DatabaseConfiguration> getDatabaseConfiguration() const override;
-
-	Future<Void> updateReplicaKeys(const std::vector<Optional<Key>>& primaryIds,
-	                               const std::vector<Optional<Key>>& remoteIds,
-	                               const DatabaseConfiguration& configuration) const override;
-
-	Future<int> tryUpdateReplicasKeyForDc(const Optional<Key>& dcId, const int& storageTeamSize) const override;
-
-	Future<Void> waitForDataDistributionEnabled(const DDEnabledState* ddEnabledState) const override;
-
-	Future<bool> isDataDistributionEnabled(const DDEnabledState* ddEnabledState) const override;
-
-	Future<Void> pollMoveKeysLock(const MoveKeysLock& lock, const DDEnabledState* ddEnabledState) const override;
-
 	Future<Void> removeKeysFromFailedServer(const UID& serverID,
 	                                        const std::vector<UID>& teamForDroppedRange,
 	                                        const MoveKeysLock& lock,
-	                                        const DDEnabledState* ddEnabledState) const override {
+	                                        const DDEnabledState* ddEnabledState) const {
 		return ::removeKeysFromFailedServer(cx, serverID, teamForDroppedRange, lock, ddEnabledState);
 	}
 
 	Future<Void> removeStorageServer(const UID& serverID,
 	                                 const Optional<UID>& tssPairID,
 	                                 const MoveKeysLock& lock,
-	                                 const DDEnabledState* ddEnabledState) const override {
+	                                 const DDEnabledState* ddEnabledState) const {
 		return ::removeStorageServer(cx, serverID, tssPairID, lock, ddEnabledState);
 	}
 
-	Future<Void> moveKeys(const MoveKeysParams& params) override { return ::moveKeys(cx, params); }
+	Future<Void> moveKeys(const MoveKeysParams& params) { return ::moveKeys(cx, params); }
 
-	Future<std::pair<Optional<StorageMetrics>, int>> waitStorageMetrics(KeyRange const& keys,
-	                                                                    StorageMetrics const& min,
-	                                                                    StorageMetrics const& max,
-	                                                                    StorageMetrics const& permittedError,
-	                                                                    int shardLimit,
-	                                                                    int expectedShardCount) const override;
+	// metrics.second is the number of key-ranges (i.e., shards) in the 'keys' key-range
+	virtual Future<std::pair<Optional<StorageMetrics>, int>> waitStorageMetrics(KeyRange const& keys,
+	                                                                           StorageMetrics const& min,
+	                                                                           StorageMetrics const& max,
+	                                                                           StorageMetrics const& permittedError,
+	                                                                           int shardLimit,
+	                                                                           int expectedShardCount) const;
 
-	Future<Standalone<VectorRef<KeyRef>>> splitStorageMetrics(KeyRange const& keys,
-	                                                          StorageMetrics const& limit,
-	                                                          StorageMetrics const& estimated,
-	                                                          Optional<int> const& minSplitBytes = {}) const override;
+	virtual Future<Standalone<VectorRef<KeyRef>>> splitStorageMetrics(
+	    KeyRange const& keys,
+	    StorageMetrics const& limit,
+	    StorageMetrics const& estimated,
+	    Optional<int> const& minSplitBytes = {}) const;
 
-	Future<Standalone<VectorRef<ReadHotRangeWithMetrics>>> getReadHotRanges(KeyRange const& keys) const override;
+	Future<Standalone<VectorRef<ReadHotRangeWithMetrics>>> getReadHotRanges(KeyRange const& keys) const;
 
-	Future<HealthMetrics> getHealthMetrics(bool detailed) const override;
+	Future<HealthMetrics> getHealthMetrics(bool detailed) const;
 
-	Future<Optional<Value>> readRebalanceDDIgnoreKey() const override;
+	Future<Optional<Value>> readRebalanceDDIgnoreKey() const;
 
-	Future<Void> waitDDTeamInfoPrintSignal() const override;
+	Future<Void> waitDDTeamInfoPrintSignal() const;
 
-	Future<std::vector<ProcessData>> getWorkers() const override;
+	Future<std::vector<ProcessData>> getWorkers() const;
 
-	Future<Optional<HealthMetrics::StorageStats>> getStorageStats(const UID& id, double maxStaleness) const override;
+	Future<Optional<HealthMetrics::StorageStats>> getStorageStats(const UID& id, double maxStaleness) const;
 
-	Future<Void> waitForAllDataRemoved(
+	virtual Future<Void> waitForAllDataRemoved(
 	    const UID& serverID,
 	    const Version& addedVersion,
-	    Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure) const override;
+	    Reference<ShardsAffectedByTeamFailure> shardsAffectedByTeamFailure) const;
 };
 
 #endif // FOUNDATIONDB_DDTXNPROCESSOR_H

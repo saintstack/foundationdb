@@ -401,7 +401,7 @@ public:
 	PromiseStream<Future<Void>> addActor;
 
 	// State initialized when bootstrap
-	Reference<IDDTxnProcessor> txnProcessor;
+	Reference<DDTxnProcessor> txnProcessor;
 	MoveKeysLock& lock; // reference to context->lock
 	DatabaseConfiguration& configuration; // reference to context->configuration
 	std::vector<Optional<Key>> primaryDcId;
@@ -2707,7 +2707,7 @@ Future<Void> scheduleBulkDumpJob(Reference<DataDistributor> self) {
 	KeyRange bulkDumpRange;
 	RangeResult bulkDumpResult;
 	int rangeLocationIndex = 0;
-	std::vector<IDDTxnProcessor::DDRangeLocations> rangeLocations;
+	std::vector<DDTxnProcessor::DDRangeLocations> rangeLocations;
 	KeyRange taskRange;
 	std::vector<Future<Void>> actors;
 	Transaction tr(cx);
@@ -4793,7 +4793,7 @@ Future<std::unordered_map<UID, KeyValueStoreType>> getStorageType(std::vector<St
 // straggler; see AUDIT_TASK_MAX_BYTES. Takes the txnProcessor and ddId rather than the DataDistributor
 // so a mock can drive it: the failure mode that matters -- a metrics read error must degrade to the
 // unsplit shard, never fail the audit -- is otherwise only reachable on a real cluster.
-static Future<std::vector<KeyRange>> boundAuditTaskRange(Reference<IDDTxnProcessor> txnProcessor,
+static Future<std::vector<KeyRange>> boundAuditTaskRange(Reference<DDTxnProcessor> txnProcessor,
                                                          UID ddId,
                                                          KeyRange shardRange) {
 	if (SERVER_KNOBS->AUDIT_TASK_MAX_BYTES <= 0 || shardRange.empty()) {
@@ -4881,7 +4881,7 @@ Future<Void> scheduleAuditOnRange(Reference<DataDistributor> self,
 	try {
 		while (currentRangeToScheduleBegin < rangeToSchedule.end) {
 			currentRangeToSchedule = Standalone(KeyRangeRef(currentRangeToScheduleBegin, rangeToSchedule.end));
-			std::vector<IDDTxnProcessor::DDRangeLocations> rangeLocations =
+			std::vector<DDTxnProcessor::DDRangeLocations> rangeLocations =
 			    co_await self->txnProcessor->getSourceServerInterfacesForRange(currentRangeToSchedule);
 			if (SERVER_KNOBS->ENABLE_AUDIT_VERBOSE_TRACE) {
 				TraceEvent(SevInfo, "DDScheduleAuditOnCurrentRange", self->ddId)

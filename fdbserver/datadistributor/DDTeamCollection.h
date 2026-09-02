@@ -179,15 +179,8 @@ FDB_BOOLEAN_PARAM(IsRedundantTeam);
 FDB_BOOLEAN_PARAM(IsBadTeam);
 FDB_BOOLEAN_PARAM(WaitWiggle);
 
-// send request/signal to DDTeamCollection through interface
-// call synchronous method from components outside DDTeamCollection
-struct IDDTeamCollection {
-	PromiseStream<GetTeamRequest> getTeam;
-	virtual ~IDDTeamCollection() = default;
-};
-
 struct DDTeamCollectionInitParams {
-	Reference<IDDTxnProcessor> db;
+	Reference<DDTxnProcessor> db;
 	UID distributorId;
 	MoveKeysLock const& lock;
 	PromiseStream<RelocateShard> const& output;
@@ -669,7 +662,7 @@ protected:
 	void updateTeamEligibility();
 
 public:
-	Reference<IDDTxnProcessor> db;
+	Reference<DDTxnProcessor> db;
 
 	DatabaseConfiguration configuration;
 

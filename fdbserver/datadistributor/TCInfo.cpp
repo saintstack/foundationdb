@@ -119,7 +119,7 @@ public:
 		co_await updateServerMetrics(server.getPtr());
 	}
 
-	static Future<Void> serverMetricsPolling(TCServerInfo* server, Reference<IDDTxnProcessor> txnProcessor) {
+	static Future<Void> serverMetricsPolling(TCServerInfo* server, Reference<DDTxnProcessor> txnProcessor) {
 		double lastUpdate = now();
 		while (true) {
 			co_await (server->updateServerMetrics() &&
@@ -177,7 +177,7 @@ Future<Void> TCServerInfo::updateServerMetrics(Reference<TCServerInfo> server) {
 	return TCServerInfoImpl::updateServerMetrics(server);
 }
 
-Future<Void> TCServerInfo::serverMetricsPolling(Reference<IDDTxnProcessor> txnProcessor) {
+Future<Void> TCServerInfo::serverMetricsPolling(Reference<DDTxnProcessor> txnProcessor) {
 	return TCServerInfoImpl::serverMetricsPolling(this, txnProcessor);
 }
 
