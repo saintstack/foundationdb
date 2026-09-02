@@ -30,8 +30,6 @@
 #include "ShardsAffectedByTeamFailure.h"
 #include "flow/FastRef.h"
 
-FDB_BOOLEAN_PARAM(SkipDDModeCheck);
-
 struct InitialDataDistribution;
 struct DDShardInfo;
 
@@ -82,11 +80,11 @@ public:
 	// get the storage server list and Process class, only throw transaction non-retryable exceptions
 	virtual Future<ServerWorkerInfos> getServerListAndProcessClasses();
 
-	Future<Reference<InitialDataDistribution>> getInitialDataDistribution(const UID& distributorId,
-	                                                                      const MoveKeysLock& moveKeysLock,
-	                                                                      const std::vector<Optional<Key>>& remoteDcIds,
-	                                                                      const DDEnabledState* ddEnabledState,
-	                                                                      SkipDDModeCheck skipDDModeCheck);
+	Future<Reference<InitialDataDistribution>> getInitialDataDistribution(
+	    const UID& distributorId,
+	    const MoveKeysLock& moveKeysLock,
+	    const std::vector<Optional<Key>>& remoteDcIds,
+	    const DDEnabledState* ddEnabledState);
 
 	[[nodiscard]] Future<MoveKeysLock> takeMoveKeysLock(UID const& ddId) const;
 

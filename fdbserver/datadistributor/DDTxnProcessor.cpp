@@ -394,8 +394,7 @@ class DDTxnProcessorImpl {
 	                                                                             UID distributorId,
 	                                                                             MoveKeysLock moveKeysLock,
 	                                                                             std::vector<Optional<Key>> remoteDcIds,
-	                                                                             const DDEnabledState* ddEnabledState,
-	                                                                             SkipDDModeCheck skipDDModeCheck) {
+	                                                                             const DDEnabledState* ddEnabledState) {
 		auto result = makeReference<InitialDataDistribution>();
 		Key beginKey = allKeys.begin;
 
@@ -415,8 +414,6 @@ class DDTxnProcessorImpl {
 		Optional<Key> healthyZone = co_await getHealthyZone(cx, distributorId);
 		result->initHealthyZoneValue = healthyZone;
 
-		CODE_PROBE(
-		    (bool)skipDDModeCheck, "DD Mode won't prevent read initial data distribution.", probe::decoration::rare);
 		// Get the server list in its own try/catch block since it modifies result.  We don't want a subsequent failure
 		// causing entries to be duplicated
 		// Phase 1: Single transaction to read server list and all persisted data moves
@@ -441,7 +438,7 @@ class DDTxnProcessorImpl {
 					BinaryReader rd(mode.get(), Unversioned());
 					rd >> result->mode;
 				}
-				if ((!skipDDModeCheck && !result->mode) || !ddEnabledState->isEnabled()) {
+				if (!result->mode || !ddEnabledState->isEnabled()) {
 					// DD can be disabled persistently (result->mode = 0) or transiently (isEnabled() = 0)
 					TraceEvent(SevDebug, "GetInitialDataDistribution_DisabledDD").log();
 					co_return result;
@@ -921,10 +918,8 @@ Future<Reference<InitialDataDistribution>> DDTxnProcessor::getInitialDataDistrib
     const UID& distributorId,
     const MoveKeysLock& moveKeysLock,
     const std::vector<Optional<Key>>& remoteDcIds,
-    const DDEnabledState* ddEnabledState,
-    SkipDDModeCheck skipDDModeCheck) {
-	return DDTxnProcessorImpl::getInitialDataDistribution(
-	    cx, distributorId, moveKeysLock, remoteDcIds, ddEnabledState, skipDDModeCheck);
+    const DDEnabledState* ddEnabledState) {
+	return DDTxnProcessorImpl::getInitialDataDistribution(cx, distributorId, moveKeysLock, remoteDcIds, ddEnabledState);
 }
 
 Future<Void> DDTxnProcessor::waitForDataDistributionEnabled(const DDEnabledState* ddEnabledState) const {
