@@ -53,12 +53,6 @@ public:
 
 		bool hasServer(const UID& id) const { return std::find(servers.begin(), servers.end(), id) != servers.end(); }
 
-		bool removeServer(const UID& id) {
-			auto oldSize = servers.size();
-			servers.erase(std::remove(servers.begin(), servers.end(), id), servers.end());
-			return oldSize != servers.size();
-		}
-
 		std::string toString() const { return describe(servers); };
 	};
 
@@ -134,15 +128,10 @@ private:
 	// only insert into team_shards
 	void insert(Team team, KeyRange const& range);
 
-	bool removeFailedServerForSingleRange(ShardsAffectedByTeamFailure::Team& team, const UID& id, KeyRangeRef keys);
-
 public:
-	// return the iterator that traversing all ranges
-	auto getAllRanges() const -> decltype(shard_teams)::ConstRanges;
 	auto intersectingRanges(KeyRangeRef keyRange) const -> decltype(shard_teams)::ConstRanges;
 	// get total shards count
 	size_t getNumberOfShards() const;
-	void removeFailedServerForRange(KeyRangeRef keys, const UID& serverID);
 };
 
 #endif // FOUNDATIONDB_SHARDSAFFECTEDBYTEAMFAILURE_H
