@@ -5231,16 +5231,22 @@ Future<Void> doAuditOnStorageServer(Reference<DataDistributor> self,
 	AuditType auditType = req.getType();
 	ASSERT(auditType == AuditType::ValidateHA || auditType == AuditType::ValidateReplica ||
 	       auditType == AuditType::ValidateStorageServerShard || auditType == AuditType::ValidateRestore);
-	TraceEvent(SevInfo, "DDDoAuditOnStorageServerBegin", self->ddId)
-	    .detail("AuditID", req.id)
-	    .detail("Range", req.range)
-	    .detail("AuditType", auditType)
-	    .detail("KeyValueStoreType", audit->coreState.engineType.toString())
-	    .detail("StorageServer", ssi.toString())
-	    .detail("TargetServers", describe(req.targetServers))
-	    .detail("DDDoAuditTaskIssue", audit->overallIssuedDoAuditCount)
-	    .detail("DDDoAuditTaskComplete", audit->overallCompleteDoAuditCount)
-	    .detail("DDDoAuditTaskSkip", audit->overallSkippedDoAuditCount);
+	// All three events below carry the same nine fields; only the name and the error differ.
+	auto traceDoAudit = [&](const char* name) {
+		TraceEvent ev(SevInfo, name, self->ddId);
+		ev.detail("AuditID", req.id)
+		    .detail("Range", req.range)
+		    .detail("AuditType", auditType)
+		    .detail("KeyValueStoreType", audit->coreState.engineType.toString())
+		    .detail("StorageServer", ssi.toString())
+		    .detail("TargetServers", describe(req.targetServers))
+		    .detail("DDDoAuditTaskIssue", audit->overallIssuedDoAuditCount)
+		    .detail("DDDoAuditTaskComplete", audit->overallCompleteDoAuditCount)
+		    .detail("DDDoAuditTaskSkip", audit->overallSkippedDoAuditCount);
+		return ev;
+	};
+
+	traceDoAudit("DDDoAuditOnStorageServerBegin");
 
 	try {
 		audit->overallIssuedDoAuditCount++;
@@ -5259,32 +5265,13 @@ Future<Void> doAuditOnStorageServer(Reference<DataDistributor> self,
 			    .detail("Error", vResult.get().error);
 		}
 		audit->overallCompleteDoAuditCount++;
-		TraceEvent(SevInfo, "DDDoAuditOnStorageServerResult", self->ddId)
-		    .detail("AuditID", req.id)
-		    .detail("Range", req.range)
-		    .detail("AuditType", auditType)
-		    .detail("KeyValueStoreType", audit->coreState.engineType.toString())
-		    .detail("StorageServer", ssi.toString())
-		    .detail("TargetServers", describe(req.targetServers))
-		    .detail("DDDoAuditTaskIssue", audit->overallIssuedDoAuditCount)
-		    .detail("DDDoAuditTaskComplete", audit->overallCompleteDoAuditCount)
-		    .detail("DDDoAuditTaskSkip", audit->overallSkippedDoAuditCount);
+		traceDoAudit("DDDoAuditOnStorageServerResult");
 		releaseAuditTaskBudget(audit, "doAuditOnStorageServer");
 	} catch (Error& e) {
 		if (e.code() == error_code_actor_cancelled) {
 			throw e;
 		}
-		TraceEvent(SevInfo, "DDDoAuditOnStorageServerError", self->ddId)
-		    .errorUnsuppressed(e)
-		    .detail("AuditID", req.id)
-		    .detail("Range", req.range)
-		    .detail("AuditType", auditType)
-		    .detail("KeyValueStoreType", audit->coreState.engineType.toString())
-		    .detail("StorageServer", ssi.toString())
-		    .detail("TargetServers", describe(req.targetServers))
-		    .detail("DDDoAuditTaskIssue", audit->overallIssuedDoAuditCount)
-		    .detail("DDDoAuditTaskComplete", audit->overallCompleteDoAuditCount)
-		    .detail("DDDoAuditTaskSkip", audit->overallSkippedDoAuditCount);
+		traceDoAudit("DDDoAuditOnStorageServerError").errorUnsuppressed(e);
 		releaseAuditTaskBudget(audit, "doAuditOnStorageServerError");
 		if (req.getType() == AuditType::ValidateStorageServerShard) {
 			throw e; // handled by scheduleAuditStorageShardOnServer
