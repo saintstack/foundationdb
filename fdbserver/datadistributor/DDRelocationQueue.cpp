@@ -195,6 +195,12 @@ class ParallelTCInfo final : public ReferenceCounted<ParallelTCInfo>, public IDa
 		return result;
 	}
 
+	void forEach(std::function<void(IDataDistributionTeam&)> func) const {
+		for (auto& team : teams) {
+			func(*team);
+		}
+	}
+
 	bool any(std::function<bool(IDataDistributionTeam const&)> func) const {
 		for (const auto& team : teams) {
 			if (func(*team)) {
@@ -222,11 +228,7 @@ public:
 	}
 
 	int size() const override {
-		int totalSize = 0;
-		for (auto it = teams.begin(); it != teams.end(); it++) {
-			totalSize += (*it)->size();
-		}
-		return totalSize;
+		return sum<int>([](IDataDistributionTeam const& team) { return team.size(); });
 	}
 
 	std::vector<UID> const& getServerIDs() const override {
@@ -239,15 +241,11 @@ public:
 	}
 
 	void addDataInFlightToTeam(int64_t delta) override {
-		for (auto& team : teams) {
-			team->addDataInFlightToTeam(delta);
-		}
+		forEach([delta](IDataDistributionTeam& team) { team.addDataInFlightToTeam(delta); });
 	}
 
 	void addReadInFlightToTeam(int64_t delta) override {
-		for (auto& team : teams) {
-			team->addReadInFlightToTeam(delta);
-		}
+		forEach([delta](IDataDistributionTeam& team) { team.addReadInFlightToTeam(delta); });
 	}
 
 	int64_t getDataInFlightToTeam() const override {
@@ -342,9 +340,9 @@ public:
 		return any([](IDataDistributionTeam const& team) { return team.isWrongConfiguration(); });
 	}
 	void setWrongConfiguration(bool wrongConfiguration) override {
-		for (auto it = teams.begin(); it != teams.end(); it++) {
-			(*it)->setWrongConfiguration(wrongConfiguration);
-		}
+		forEach([wrongConfiguration](IDataDistributionTeam& team) {
+			team.setWrongConfiguration(wrongConfiguration);
+		});
 	}
 
 	bool isHealthy() const override {
@@ -352,23 +350,17 @@ public:
 	}
 
 	void setHealthy(bool h) override {
-		for (auto it = teams.begin(); it != teams.end(); it++) {
-			(*it)->setHealthy(h);
-		}
+		forEach([h](IDataDistributionTeam& team) { team.setHealthy(h); });
 	}
 
 	int getPriority() const override {
 		int priority = 0;
-		for (auto it = teams.begin(); it != teams.end(); it++) {
-			priority = std::max(priority, (*it)->getPriority());
-		}
+		forEach([&priority](IDataDistributionTeam& team) { priority = std::max(priority, team.getPriority()); });
 		return priority;
 	}
 
 	void setPriority(int p) override {
-		for (auto it = teams.begin(); it != teams.end(); it++) {
-			(*it)->setPriority(p);
-		}
+		forEach([p](IDataDistributionTeam& team) { team.setPriority(p); });
 	}
 	void addref() const override { ReferenceCounted<ParallelTCInfo>::addref(); }
 	void delref() const override { ReferenceCounted<ParallelTCInfo>::delref(); }
