@@ -1124,19 +1124,23 @@ public:
 				}
 				firstHealthChangeTrace = false;
 
-				TraceEvent(SevVerbose, "TeamHealthChangeDetected", self->distributorId)
-				    .detail("Team", team->getDesc())
-				    .detail("ServersLeft", serversLeft)
-				    .detail("LastServersLeft", lastServersLeft)
-				    .detail("AnyUndesired", anyUndesired)
-				    .detail("LastAnyUndesired", lastAnyUndesired)
-				    .detail("AnyWrongConfiguration", anyWrongConfiguration)
-				    .detail("LastWrongConfiguration", lastWrongConfiguration)
-				    .detail("ContainsWigglingServer", anyWigglingServer)
-				    .detail("Recheck", recheck)
-				    .detail("BadTeam", badTeam)
-				    .detail("LastZeroHealthy", lastZeroHealthy)
-				    .detail("ZeroHealthyTeam", self->zeroHealthyTeams->get());
+				// Guarded rather than leaning on detail()'s short-circuit: getDesc() copies the team's whole
+				// StorageServerInterface vector and formats every member, and that cost is paid at the call
+				// site even when the event is filtered out. This runs per team, per teamTracker iteration.
+				if (TraceEvent ev(SevVerbose, "TeamHealthChangeDetected", self->distributorId); ev.isEnabled()) {
+					ev.detail("Team", team->getDesc())
+					    .detail("ServersLeft", serversLeft)
+					    .detail("LastServersLeft", lastServersLeft)
+					    .detail("AnyUndesired", anyUndesired)
+					    .detail("LastAnyUndesired", lastAnyUndesired)
+					    .detail("AnyWrongConfiguration", anyWrongConfiguration)
+					    .detail("LastWrongConfiguration", lastWrongConfiguration)
+					    .detail("ContainsWigglingServer", anyWigglingServer)
+					    .detail("Recheck", recheck)
+					    .detail("BadTeam", badTeam)
+					    .detail("LastZeroHealthy", lastZeroHealthy)
+					    .detail("ZeroHealthyTeam", self->zeroHealthyTeams->get());
+				}
 
 				lastReady = self->initialFailureReactionDelay.isReady();
 				lastZeroHealthy = self->zeroHealthyTeams->get();
@@ -1301,10 +1305,13 @@ public:
 							}
 						}
 
-						TraceEvent(SevVerbose, "ServerTeamRelocatingShards", self->distributorId)
-						    .detail("Info", team->getDesc())
-						    .detail("TeamID", team->getTeamID())
-						    .detail("Shards", shards.size());
+						// getDesc() is not free; see the note on TeamHealthChangeDetected.
+						if (TraceEvent ev(SevVerbose, "ServerTeamRelocatingShards", self->distributorId);
+						    ev.isEnabled()) {
+							ev.detail("Info", team->getDesc())
+							    .detail("TeamID", team->getTeamID())
+							    .detail("Shards", shards.size());
+						}
 
 						for (int i = 0; i < shards.size(); i++) {
 							if (retryUnhealthyShards && !submittedShards.insert(shards[i]).second) {
@@ -6344,9 +6351,11 @@ bool DDTeamCollection::exclusionSafetyCheck(std::vector<UID>& excludeServerIDs) 
 	for (const auto& team : teams) {
 		std::vector<UID> teamServerIDs = team->getServerIDs();
 		std::sort(teamServerIDs.begin(), teamServerIDs.end());
-		TraceEvent(SevDebug, "DDExclusionSafetyCheck", distributorId)
-		    .detail("Excluding", describe(excludeServerIDs))
-		    .detail("Existing", team->getDesc());
+		// Both details are expensive: describe() formats the whole exclusion list and getDesc()
+		// copies the team's server interfaces, once per team here.
+		if (TraceEvent ev(SevDebug, "DDExclusionSafetyCheck", distributorId); ev.isEnabled()) {
+			ev.detail("Excluding", describe(excludeServerIDs)).detail("Existing", team->getDesc());
+		}
 		// Find size of set intersection of both vectors and see if the leftover team is valid
 		std::vector<UID> intersectSet(teamServerIDs.size());
 		auto it = std::set_intersection(excludeServerIDs.begin(),
