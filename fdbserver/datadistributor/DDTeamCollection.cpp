@@ -3124,6 +3124,7 @@ public:
 						AddressExclusion addrExcl(addr.ip, addr.port);
 						if (serverStatus.excludeOnRecruit()) {
 							TraceEvent(SevDebug, "DDRecruitExcl1")
+							    .suppressFor(1.0)
 							    .detail("Primary", self->primary)
 							    .detail("Excluding", s->second->getLastKnownInterface().address());
 							exclusions.insert(addrExcl);
@@ -3140,6 +3141,7 @@ public:
 					for (const auto& s : excl) {
 						if (self->excludedServers.get(s) != DDTeamCollection::Status::NONE) {
 							TraceEvent(SevDebug, "DDRecruitExcl2")
+							    .suppressFor(1.0)
 							    .detail("Primary", self->primary)
 							    .detail("Excluding", s.toString());
 							exclusions.insert(s);
@@ -3148,7 +3150,7 @@ public:
 
 					// Exclude workers that have invalid locality
 					for (auto& addr : self->invalidLocalityAddr) {
-						TraceEvent(SevDebug, "DDRecruitExclInvalidAddr").detail("Excluding", addr.toString());
+						TraceEvent(SevDebug, "DDRecruitExclInvalidAddr").suppressFor(1.0).detail("Excluding", addr.toString());
 						exclusions.insert(addr);
 					}
 
@@ -3162,6 +3164,7 @@ public:
 							// which case we won't need to recruit on it and it would be counted with Excl1.
 							exclusions.insert(it.first);
 							TraceEvent(SevDebug, "DDRecruitExcl3")
+							    .suppressFor(1.0)
 							    .detail("Primary", self->primary)
 							    .detail("Excluding", it.first.toString())
 							    .detail("IgnoredCount", it.second);
