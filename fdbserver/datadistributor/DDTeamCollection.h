@@ -572,7 +572,9 @@ protected:
 	void fixUnderReplication();
 
 	// Check if the number of server (and machine teams) is larger than the maximum allowed number
-	void traceTeamCollectionInfo() const;
+	// Emits the TeamCollectionInfo status event. addedTeams and teamsToBuild describe the build pass that
+	// just ran, and default to zero for callers that are only reporting current state.
+	void traceTeamCollectionInfo(int addedTeams = 0, int teamsToBuild = 0) const;
 
 	Future<Void> updateReplicasKey(Optional<Key> dcId);
 

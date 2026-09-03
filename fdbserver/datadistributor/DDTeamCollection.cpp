@@ -5841,35 +5841,12 @@ int DDTeamCollection::addTeamsBestOf(int teamsToBuild, int desiredTeams, int max
 		addedTeams++;
 	}
 
-	healthyMachineTeamCount = getHealthyMachineTeamCount();
-
-	auto [minTeamsOnServer, maxTeamsOnServer] = calculateMinMaxServerTeamsOnServer();
-	auto [minMachineTeamsOnMachine, maxMachineTeamsOnMachine] = calculateMinMaxMachineTeamsOnMachine();
-
-	TraceEvent("TeamCollectionInfo", distributorId)
-	    .detail("Primary", primary)
-	    .detail("AddedTeams", addedTeams)
-	    .detail("TeamsToBuild", teamsToBuild)
-	    .detail("CurrentServerTeams", teams.size())
-	    .detail("DesiredTeams", desiredTeams)
-	    .detail("MaxTeams", maxTeams)
-	    .detail("StorageTeamSize", configuration.storageTeamSize)
-	    .detail("CurrentMachineTeams", machineTeams.size())
-	    .detail("CurrentHealthyMachineTeams", healthyMachineTeamCount)
-	    .detail("DesiredMachineTeams", desiredMachineTeams)
-	    .detail("MaxMachineTeams", maxMachineTeams)
-	    .detail("TotalHealthyMachines", totalHealthyMachineCount)
-	    .detail("MinTeamsOnServer", minTeamsOnServer)
-	    .detail("MaxTeamsOnServer", maxTeamsOnServer)
-	    .detail("MinMachineTeamsOnMachine", minMachineTeamsOnMachine)
-	    .detail("MaxMachineTeamsOnMachine", maxMachineTeamsOnMachine)
-	    .detail("DoBuildTeams", doBuildTeams)
-	    .trackLatest(teamCollectionInfoEventHolder->trackingKey);
+	traceTeamCollectionInfo(addedTeams, teamsToBuild);
 
 	return addedTeams;
 }
 
-void DDTeamCollection::traceTeamCollectionInfo() const {
+void DDTeamCollection::traceTeamCollectionInfo(int addedTeams, int teamsToBuild) const {
 	int totalHealthyServerCount = calculateHealthyServerCount();
 	int desiredServerTeams = SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * totalHealthyServerCount;
 	int maxServerTeams = SERVER_KNOBS->MAX_TEAMS_PER_SERVER * totalHealthyServerCount;
@@ -5884,8 +5861,8 @@ void DDTeamCollection::traceTeamCollectionInfo() const {
 
 	TraceEvent("TeamCollectionInfo", distributorId)
 	    .detail("Primary", primary)
-	    .detail("AddedTeams", 0)
-	    .detail("TeamsToBuild", 0)
+	    .detail("AddedTeams", addedTeams)
+	    .detail("TeamsToBuild", teamsToBuild)
 	    .detail("CurrentServerTeams", teams.size())
 	    .detail("DesiredTeams", desiredServerTeams)
 	    .detail("MaxTeams", maxServerTeams)
