@@ -975,8 +975,8 @@ public:
 				    .detail("TotalHealthyMachines", totalHealthyMachineCount)
 				    .detail("MinTeamsOnServer", minTeamsOnServer)
 				    .detail("MaxTeamsOnServer", maxTeamsOnServer)
-				    .detail("MinMachineTeamsOnMachine", maxMachineTeamsOnMachine)
-				    .detail("MaxMachineTeamsOnMachine", minMachineTeamsOnMachine)
+				    .detail("MinMachineTeamsOnMachine", minMachineTeamsOnMachine)
+				    .detail("MaxMachineTeamsOnMachine", maxMachineTeamsOnMachine)
 				    .detail("DoBuildTeams", self->doBuildTeams)
 				    .trackLatest(self->teamCollectionInfoEventHolder->trackingKey);
 			}
