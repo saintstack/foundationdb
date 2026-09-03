@@ -621,7 +621,7 @@ public:
 					                         storageQueueThreshold);
 					if (!bestOption.present()) {
 						// In case, we may return a team whose shard count is more than DESIRED_MAX_SHARDS_PER_TEAM.
-						TraceEvent("GetBestTeamPreferWithinShardLimitFailed").log();
+						TraceEvent("GetBestTeamPreferWithinShardLimitFailed").suppressFor(5.0).log();
 					}
 				}
 				if (!bestOption.present()) {
@@ -694,7 +694,7 @@ public:
 						                                       numSkippedSSQueueTooLong);
 						if (!bestOption.present()) {
 							// In case, we may return a team whose shard count is more than DESIRED_MAX_SHARDS_PER_TEAM.
-							TraceEvent("GetBestTeamFromCandidatesPreferWithinShardLimitFailed").log();
+							TraceEvent("GetBestTeamFromCandidatesPreferWithinShardLimitFailed").suppressFor(5.0).log();
 						}
 					}
 
