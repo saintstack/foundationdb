@@ -4821,24 +4821,22 @@ void DDTeamCollection::evaluateTeamQuality() const {
 	    .detail("MachineMaxTeams", maxMachineTeams);
 }
 
-int DDTeamCollection::overlappingMembers(const std::vector<UID>& team) const {
-	if (team.empty()) {
-		return 0;
-	}
+namespace {
 
-	int maxMatchingServers = 0;
-	const UID& serverID = team[0];
-	const auto it = server_info.find(serverID);
-	ASSERT(it != server_info.end());
-	const auto& usedTeams = it->second->getTeams();
-	for (const auto& usedTeam : usedTeams) {
-		auto used = usedTeam->getServerIDs();
+// Largest number of members `team` shares with any team already using its first member. Both `team`
+// and each candidate must be sorted; the scan is a sorted-set intersection. Stops early once some
+// existing team is found to contain `team` outright, since no larger overlap is possible.
+template <class Id, class UsedTeams, class GetIds>
+int maxTeamOverlap(std::vector<Id> const& team, UsedTeams const& usedTeams, GetIds const& getIds) {
+	int maxMatching = 0;
+	for (auto const& usedTeam : usedTeams) {
+		auto used = getIds(usedTeam);
 		int teamIdx = 0;
 		int usedIdx = 0;
-		int matchingServers = 0;
+		int matching = 0;
 		while (teamIdx < team.size() && usedIdx < used.size()) {
 			if (team[teamIdx] == used[usedIdx]) {
-				matchingServers++;
+				matching++;
 				teamIdx++;
 				usedIdx++;
 			} else if (team[teamIdx] < used[usedIdx]) {
@@ -4847,49 +4845,33 @@ int DDTeamCollection::overlappingMembers(const std::vector<UID>& team) const {
 				usedIdx++;
 			}
 		}
-		ASSERT_GT(matchingServers, 0);
-		maxMatchingServers = std::max(maxMatchingServers, matchingServers);
-		if (maxMatchingServers == team.size()) {
-			return maxMatchingServers;
+		ASSERT_GT(matching, 0);
+		maxMatching = std::max(maxMatching, matching);
+		if (maxMatching == team.size()) {
+			break;
 		}
 	}
+	return maxMatching;
+}
 
-	return maxMatchingServers;
+} // namespace
+
+int DDTeamCollection::overlappingMembers(const std::vector<UID>& team) const {
+	if (team.empty()) {
+		return 0;
+	}
+	const auto it = server_info.find(team[0]);
+	ASSERT(it != server_info.end());
+	return maxTeamOverlap(team, it->second->getTeams(), [](auto const& t) { return t->getServerIDs(); });
 }
 
 int DDTeamCollection::overlappingMachineMembers(std::vector<Standalone<StringRef>> const& team) const {
 	if (team.empty()) {
 		return 0;
 	}
-
-	int maxMatchingServers = 0;
 	auto it = machine_info.find(team[0]);
 	ASSERT(it != machine_info.end());
-	auto const& machineTeams = it->second->machineTeams;
-	for (auto const& usedTeam : machineTeams) {
-		auto used = usedTeam->getMachineIDs();
-		int teamIdx = 0;
-		int usedIdx = 0;
-		int matchingServers = 0;
-		while (teamIdx < team.size() && usedIdx < used.size()) {
-			if (team[teamIdx] == used[usedIdx]) {
-				matchingServers++;
-				teamIdx++;
-				usedIdx++;
-			} else if (team[teamIdx] < used[usedIdx]) {
-				teamIdx++;
-			} else {
-				usedIdx++;
-			}
-		}
-		ASSERT_GT(matchingServers, 0);
-		maxMatchingServers = std::max(maxMatchingServers, matchingServers);
-		if (maxMatchingServers == team.size()) {
-			return maxMatchingServers;
-		}
-	}
-
-	return maxMatchingServers;
+	return maxTeamOverlap(team, it->second->machineTeams, [](auto const& t) { return t->getMachineIDs(); });
 }
 
 void DDTeamCollection::cleanupLargeTeams() {
