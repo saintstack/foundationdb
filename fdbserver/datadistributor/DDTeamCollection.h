@@ -400,6 +400,13 @@ protected:
 
 	int calculateHealthyMachineCount() const;
 
+	// Target teams (or machine teams) each server (or machine) should participate in. Derived from
+	// DESIRED_TEAMS_PER_SERVER: a team of size n is shared by n servers, so the per-server count is the
+	// desired total scaled by (storageTeamSize + 1) / 2.
+	int targetTeamsPerServer() const {
+		return (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2;
+	}
+
 	std::pair<int64_t, int64_t> calculateMinMaxServerTeamsOnServer() const;
 
 	std::pair<int64_t, int64_t> calculateMinMaxMachineTeamsOnMachine() const;

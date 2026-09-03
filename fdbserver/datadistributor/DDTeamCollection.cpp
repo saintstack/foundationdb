@@ -1459,8 +1459,7 @@ public:
 		bool hasWrongDC = !self->isCorrectDC(*server);
 		bool hasInvalidLocality =
 		    !self->isValidLocality(self->configuration.storagePolicy, server->getLastKnownInterface().locality);
-		int targetTeamNumPerServer =
-		    (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (self->configuration.storageTeamSize + 1)) / 2;
+		int targetTeamNumPerServer = self->targetTeamsPerServer();
 		Future<Void> storageMetadataTracker = self->updateStorageMetadata(server);
 		std::vector<Future<Void>> otherChanges;
 		Error err;
@@ -4773,8 +4772,7 @@ bool DDTeamCollection::isValidLocality(Reference<IReplicationPolicy> storagePoli
 void DDTeamCollection::evaluateTeamQuality() const {
 	int teamCount = teams.size(), serverCount = allServers.size();
 	double teamsPerServer = (double)teamCount * configuration.storageTeamSize / serverCount;
-	const int targetTeamNumPerServer =
-	    (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2;
+	const int targetTeamNumPerServer = targetTeamsPerServer();
 	ASSERT_EQ(serverCount, server_info.size());
 
 	int minTeams = std::numeric_limits<int>::max();
@@ -5599,8 +5597,7 @@ std::pair<Reference<TCMachineTeamInfo>, int> DDTeamCollection::getMachineTeamWit
 std::pair<Reference<TCMachineTeamInfo>, int> DDTeamCollection::getMachineTeamWithMostMachineTeams() const {
 	Reference<TCMachineTeamInfo> retMT;
 	int maxNumMachineTeams = 0;
-	int targetMachineTeamNumPerMachine =
-	    (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2;
+	int targetMachineTeamNumPerMachine = targetTeamsPerServer();
 
 	for (auto& mt : machineTeams) {
 		// The representative team number for the machine team mt is
@@ -5622,7 +5619,7 @@ std::pair<Reference<TCMachineTeamInfo>, int> DDTeamCollection::getMachineTeamWit
 std::pair<Reference<TCTeamInfo>, int> DDTeamCollection::getServerTeamWithMostProcessTeams() const {
 	Reference<TCTeamInfo> retST;
 	int maxNumProcessTeams = 0;
-	int targetTeamNumPerServer = (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2;
+	int targetTeamNumPerServer = targetTeamsPerServer();
 
 	for (auto& t : teams) {
 		// The minimum number of teams of a server in a team is the representative team number for the team t
@@ -5659,7 +5656,7 @@ bool DDTeamCollection::notEnoughMachineTeamsForAMachine() const {
 	// notEnoughTeamsForAServer
 	int targetMachineTeamNumPerMachine =
 	    SERVER_KNOBS->TR_FLAG_REMOVE_MT_WITH_MOST_TEAMS
-	        ? (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2
+	        ? targetTeamsPerServer()
 	        : SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER;
 	for (auto& [_, machine] : machine_info) {
 		// If SERVER_KNOBS->TR_FLAG_REMOVE_MT_WITH_MOST_TEAMS is false,
@@ -5682,7 +5679,7 @@ bool DDTeamCollection::notEnoughTeamsForAServer() const {
 	// (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER + ideal_num_of_teams_per_server) / 2
 	// ideal_num_of_teams_per_server is (#teams * storageTeamSize) / #servers, which is
 	// (#servers * DESIRED_TEAMS_PER_SERVER * storageTeamSize) / #servers.
-	int targetTeamNumPerServer = (SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (configuration.storageTeamSize + 1)) / 2;
+	int targetTeamNumPerServer = targetTeamsPerServer();
 	ASSERT_GT(targetTeamNumPerServer, 0);
 	for (auto& [serverID, server] : server_info) {
 		if (server->getTeams().size() < targetTeamNumPerServer && !server_status.get(serverID).isUnhealthy()) {
@@ -6612,7 +6609,6 @@ public:
 		int desiredTeams = SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * processSize;
 		int maxTeams = SERVER_KNOBS->MAX_TEAMS_PER_SERVER * processSize;
 		int teamSize = 3;
-		// state int targetTeamsPerServer = SERVER_KNOBS->DESIRED_TEAMS_PER_SERVER * (teamSize + 1) / 2;
 		std::unique_ptr<DDTeamCollection> collection = testTeamCollection(teamSize, policy, processSize);
 
 		collection->addTeam(std::set<UID>({ UID(1, 0), UID(2, 0), UID(3, 0) }), IsInitialTeam::True);
