@@ -2931,17 +2931,22 @@ public:
 				}
 			}
 
-			TraceEvent("DDRecruiting")
-			    .detail("ReqID", isr.reqId)
-			    .detail("Primary", self->primary)
-			    .detail("State", "Sending request to worker")
-			    .detail("WorkerID", candidateWorker.worker.id())
-			    .detail("WorkerLocality", candidateWorker.worker.locality.toString())
-			    .detail("Interf", interfaceId)
-			    .detail("Addr", candidateWorker.worker.address())
-			    .detail("TSS", recruitTss ? "true" : "false")
-			    .detail("RecruitingStream", self->recruitingStream.get())
-			    .detail("StoreType", isr.storeType);
+			// The three DDRecruiting emissions below differ only in State.
+			auto recruitingEvent = [&](const char* state) {
+				TraceEvent("DDRecruiting")
+				    .detail("ReqID", isr.reqId)
+				    .detail("Primary", self->primary)
+				    .detail("State", state)
+				    .detail("WorkerID", candidateWorker.worker.id())
+				    .detail("WorkerLocality", candidateWorker.worker.locality.toString())
+				    .detail("Interf", interfaceId)
+				    .detail("Addr", candidateWorker.worker.address())
+				    .detail("RecruitingStream", self->recruitingStream.get())
+				    .detail("TSS", recruitTss ? "true" : "false")
+				    .detail("StoreType", isr.storeType);
+			};
+
+			recruitingEvent("Sending request to worker");
 
 			Future<ErrorOr<InitializeStorageReply>> fRecruit =
 			    doRecruit
@@ -3010,17 +3015,7 @@ public:
 			self->recruitingIds.erase(interfaceId);
 			self->recruitingLocalities.erase(candidateWorker.worker.stableAddress());
 
-			TraceEvent("DDRecruiting")
-			    .detail("ReqID", isr.reqId)
-			    .detail("Primary", self->primary)
-			    .detail("State", "Finished request")
-			    .detail("WorkerID", candidateWorker.worker.id())
-			    .detail("WorkerLocality", candidateWorker.worker.locality.toString())
-			    .detail("Interf", interfaceId)
-			    .detail("Addr", candidateWorker.worker.address())
-			    .detail("RecruitingStream", self->recruitingStream.get())
-			    .detail("TSS", recruitTss ? "true" : "false")
-			    .detail("StoreType", isr.storeType);
+			recruitingEvent("Finished request");
 
 			if (newServer.present()) {
 				UID id = newServer.get().interf.id();
@@ -3031,17 +3026,7 @@ public:
 						                self->serverTrackerErrorOut,
 						                newServer.get().addedVersion,
 						                *ddEnabledState);
-						TraceEvent("DDRecruiting")
-						    .detail("ReqID", isr.reqId)
-						    .detail("Primary", self->primary)
-						    .detail("State", "Add new SS to DD")
-						    .detail("WorkerID", candidateWorker.worker.id())
-						    .detail("WorkerLocality", candidateWorker.worker.locality.toString())
-						    .detail("Interf", interfaceId)
-						    .detail("Addr", candidateWorker.worker.address())
-						    .detail("RecruitingStream", self->recruitingStream.get())
-						    .detail("TSS", recruitTss ? "true" : "false")
-						    .detail("StoreType", isr.storeType);
+						recruitingEvent("Add new SS to DD");
 						self->waitUntilRecruited.set(false);
 						// signal all done after adding tss to tracking info
 						tssState->markComplete();
