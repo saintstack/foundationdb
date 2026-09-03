@@ -295,6 +295,7 @@ Future<Void> readHotDetector(DataDistributionTracker* self) {
 
 			for (const auto& keyRange : readHotRanges) {
 				TraceEvent("ReadHotRangeLog")
+				    .suppressFor(1.0)
 				    .detail("ReadDensity", keyRange.density)
 				    .detail("ReadBandwidth", keyRange.readBandwidthSec)
 				    .detail("ReadDensityThreshold", SERVER_KNOBS->SHARD_MAX_READ_DENSITY_RATIO)
@@ -804,6 +805,7 @@ Future<Void> shardMerger(DataDistributionTracker* self,
 	// have
 	//   more than 1 shards.
 	TraceEvent("RelocateShardMergeMetrics", self->distributorId)
+	    .suppressFor(1.0)
 	    .detail("OldKeys", keys)
 	    .detail("NewKeys", mergeRange)
 	    .detail("EndingSize", endingStats.bytes)
