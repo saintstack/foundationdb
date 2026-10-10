@@ -4726,12 +4726,17 @@ TEST_CASE("/NativeCDC/TLogCommittedFrontier/AbsoluteDeadline") {
 	Future<Void> peek = fixture.peek(reply);
 	for (Version frontier = 91; frontier <= 93; ++frontier) {
 		co_await delay(0.1);
+		// A loaded host can delay these real-clock advances past the deadline; the reply must carry
+		// whatever frontier was current when it was sent, not a fixed one.
+		if (reply.getFuture().isReady()) {
+			break;
+		}
 		fixture.advance(frontier);
 	}
 	TLogPeekReply result = co_await timeoutError(reply.getFuture(), 0.2);
 	co_await peek;
 	ASSERT(now() - started >= 0.35 && now() - started < 0.6);
-	ASSERT(result.minKnownCommittedVersion == 93);
+	ASSERT(result.minKnownCommittedVersion == fixture.frontier());
 	ASSERT(fixture.timedOutPeeks() == 1);
 }
 
