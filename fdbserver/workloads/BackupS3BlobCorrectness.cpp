@@ -758,7 +758,11 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 				// not be newer than it, so the probe would prove nothing. Say so rather than assert.
 				TraceEvent(SevWarnAlways, "BS3BCW_LogReplaySentinelNoSnapshot").detail("Tag", printable(tag));
 			} else {
-				logReplaySentinelKey = backupRanges[0].begin.withSuffix("\xff_bs3bc_logreplay"_sr);
+				// Must sit INSIDE a backup range, or the restore never clears it and its survival proves
+				// nothing. A "\x00" suffix is the smallest key above begin, so it is inside [begin, end)
+				// for every range the workload generates, and will not collide with the Cycle data.
+				logReplaySentinelKey = backupRanges[0].begin.withSuffix("\x00"_sr);
+				ASSERT(backupRanges[0].contains(logReplaySentinelKey));
 				co_await runRYWTransaction(cx, [=](Reference<ReadYourWritesTransaction> tr) -> Future<Void> {
 					tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
 					tr->setOption(FDBTransactionOptions::LOCK_AWARE);
@@ -767,6 +771,8 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 				});
 				TraceEvent("BS3BCW_PlantedLogReplaySentinel")
 				    .detail("Key", printable(logReplaySentinelKey))
+				    .detail("RangeBegin", printable(backupRanges[0].begin))
+				    .detail("RangeEnd", printable(backupRanges[0].end))
 				    .detail("SnapshotEndVersion", snapshotEnd);
 			}
 		}
