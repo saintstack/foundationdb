@@ -115,6 +115,9 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 	static inline const StringRef SENTINEL_PREFIX = "\x01_bs3bc_outside/"_sr;
 	static inline const ValueRef SENTINEL_BEFORE_BACKUP = "before_backup"_sr;
 	static inline const ValueRef SENTINEL_AFTER_BACKUP = "after_backup"_sr;
+	// A key written INSIDE the backup ranges after the snapshot's end version. Only mutation-log replay
+	// can carry it into a restore, so its absence afterwards means the log was never applied.
+	static inline const ValueRef SENTINEL_LOG_REPLAY = "log_replay"_sr;
 	double backupAfter, restoreAfter, abortAndRestartAfter;
 	double minBackupAfter;
 	double backupStartAt, restoreStartAfterBackupFinished, stopDifferentialAfter;
@@ -124,6 +127,10 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 	Standalone<VectorRef<KeyRangeRef>> backupRanges;
 	std::vector<KeyRange> skippedRestoreRanges;
 	std::vector<Key> outOfRangeSentinels;
+	// logReplaySentinel: plant a key after the snapshot completes and require the restore to bring it
+	// back. Discriminates "the restore replayed the mutation log" from "the restore merely succeeded".
+	bool logReplaySentinel;
+	Key logReplaySentinelKey;
 	Standalone<VectorRef<KeyRangeRef>> restoreRanges;
 	static int backupAgentRequests;
 	LockDB locked{ false };
@@ -158,6 +165,9 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 	// expectBulkEncryptionRejection: assert --encryption-key-file is refused on a bulkdump backup. Only
 	// the backup side is probed; the comment at the probe records why the restore side cannot be.
 	bool expectBulkEncryptionRejection;
+	// mutationLogType: 0 = classic blog mutation logs, 1 = partitioned logs written by backup workers.
+	// Only the real backup uses it; the refusal probes keep passing DEFAULT so they stay independent of it.
+	int mutationLogType;
 	// expectBulkPrefixRejection: assert --add-prefix/--remove-prefix is refused on a bulkload restore.
 	bool expectBulkPrefixRejection;
 	// expectRestoreFailure: the bulkload restore is expected NOT to complete, so the workload asserts the
@@ -241,6 +251,8 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 		performValidation = getOption(options, "performValidation"_sr, false);
 		expectBulkIncrementalRejection = getOption(options, "expectBulkIncrementalRejection"_sr, false);
 		expectBulkEncryptionRejection = getOption(options, "expectBulkEncryptionRejection"_sr, false);
+		mutationLogType = getOption(options, "mutationLogType"_sr, 0);
+		logReplaySentinel = getOption(options, "logReplaySentinel"_sr, false);
 		expectBulkPrefixRejection = getOption(options, "expectBulkPrefixRejection"_sr, false);
 		// Mutually exclusive with performValidation, whose audit compares restored contents that by
 		// definition do not exist when the restore is expected to fail.
@@ -695,7 +707,7 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 			                                   tag.toString(),
 			                                   backupRanges,
 			                                   StopWhenDone{ !stopDifferentialDelay },
-			                                   MutationLogType::DEFAULT,
+			                                   (MutationLogType)mutationLogType,
 			                                   IncrementalBackupOnly::False,
 			                                   encryptionKeyFileName,
 			                                   encryptionKeyFileName.present() ? DEFAULT_ENCRYPTION_BLOCK_SIZE : 0,
@@ -717,6 +729,51 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 				observabilityCheck = verifyBulkDumpObservability(cx, backupUID, tag.toString());
 			} catch (Error& e) {
 				TraceEvent(SevWarn, "BS3BCW_CouldNotGetBackupUID").error(e);
+			}
+		}
+
+		if (logReplaySentinel) {
+			// Wait for the snapshot to finish, so the sentinel is strictly newer than every byte the
+			// snapshot can carry. The restore clears the backup ranges first, so afterwards this key can
+			// only be present if the mutation log was replayed.
+			KeyBackedTag keyBackedTag = makeBackupTag(tag.toString());
+			UidAndAbortedFlagT uidFlag = co_await keyBackedTag.getOrThrow(cx.getReference());
+			BackupConfig sentinelConfig(uidFlag.first);
+			Version snapshotEnd = ::invalidVersion;
+			for (int attempt = 0; attempt < 120 && snapshotEnd == ::invalidVersion; ++attempt) {
+				Optional<Version> end = co_await runRYWTransaction(
+				    cx, [=](Reference<ReadYourWritesTransaction> tr) mutable -> Future<Optional<Version>> {
+					    tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+					    tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+					    return sentinelConfig.latestSnapshotEndVersion().get(tr);
+				    });
+				if (end.present()) {
+					snapshotEnd = end.get();
+					break;
+				}
+				co_await delay(1.0);
+			}
+			if (snapshotEnd == ::invalidVersion) {
+				// Not a failure of the thing under test: without a completed snapshot the sentinel would
+				// not be newer than it, so the probe would prove nothing. Say so rather than assert.
+				TraceEvent(SevWarnAlways, "BS3BCW_LogReplaySentinelNoSnapshot").detail("Tag", printable(tag));
+			} else {
+				// Must sit INSIDE a backup range, or the restore never clears it and its survival proves
+				// nothing. A "\x00" suffix is the smallest key above begin, so it is inside [begin, end)
+				// for every range the workload generates, and will not collide with the Cycle data.
+				logReplaySentinelKey = backupRanges[0].begin.withSuffix("\x00"_sr);
+				ASSERT(backupRanges[0].contains(logReplaySentinelKey));
+				co_await runRYWTransaction(cx, [=](Reference<ReadYourWritesTransaction> tr) -> Future<Void> {
+					tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+					tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+					tr->set(logReplaySentinelKey, SENTINEL_LOG_REPLAY);
+					return Void();
+				});
+				TraceEvent("BS3BCW_PlantedLogReplaySentinel")
+				    .detail("Key", printable(logReplaySentinelKey))
+				    .detail("RangeBegin", printable(backupRanges[0].begin))
+				    .detail("RangeEnd", printable(backupRanges[0].end))
+				    .detail("SnapshotEndVersion", snapshotEnd);
 			}
 		}
 
@@ -1126,6 +1183,24 @@ struct BackupS3BlobCorrectnessWorkload : TestWorkload {
 					TraceEvent("BS3BCW_RestoreComplete")
 					    .detail("BackupTag", printable(backupTag))
 					    .detail("RestoreVersion", v);
+
+					if (logReplaySentinel && logReplaySentinelKey.size() > 0) {
+						Optional<Value> planted = co_await runRYWTransaction(
+						    cx, [=](Reference<ReadYourWritesTransaction> tr) -> Future<Optional<Value>> {
+							    tr->setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+							    tr->setOption(FDBTransactionOptions::LOCK_AWARE);
+							    return tr->get(logReplaySentinelKey);
+						    });
+						bool replayed = planted.present() && planted.get() == SENTINEL_LOG_REPLAY;
+						TraceEvent(replayed ? SevInfo : SevError, "BS3BCW_LogReplaySentinelCheck")
+						    .detail("Key", printable(logReplaySentinelKey))
+						    .detail("Replayed", replayed)
+						    .detail("Found", planted.present() ? printable(planted.get()) : "<missing>")
+						    .detail("Meaning",
+						            replayed ? "mutation log was replayed"
+						                     : "restore completed WITHOUT applying the mutation log");
+						ASSERT(replayed);
+					}
 
 					// ASSERT: When useRangeFileRestore=false, BulkLoad MUST have been used
 					if (!useRangeFileRestore) {
