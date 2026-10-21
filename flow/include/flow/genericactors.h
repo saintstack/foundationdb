@@ -2390,7 +2390,7 @@ public:
 				    change.getPromiseReferenceCount() == 1) {
 					if (EXPENSIVE_VALIDATION) {
 						auto& p = self->items[key];
-						ASSERT(p.change.getFuture() == change);
+						ASSERT_ABORT(p.change.getFuture() == change);
 					}
 					self->items.erase(key);
 				}
