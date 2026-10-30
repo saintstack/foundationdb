@@ -2169,6 +2169,24 @@ Future<Void> changeBackupResumed(Database db, bool pause) {
 		FileBackupAgent backupAgent;
 		co_await backupAgent.changePause(db, pause);
 		printf("All backup agents have been %s.\n", pause ? "paused" : "resumed");
+
+		// Pausing writes the task bucket pause key and backupPausedKey. Data distribution drives a
+		// bulkdump or bulkload job and reads neither, so a bulk job keeps running while the backup
+		// that owns it looks paused. Say so rather than let the operator infer otherwise.
+		if (pause) {
+			int bulkDumpMode = co_await getBulkDumpMode(db);
+			int bulkLoadMode = co_await getBulkLoadMode(db);
+			if (bulkDumpMode == 1 || bulkLoadMode == 1) {
+				fprintf(stderr,
+				        "WARNING: %s mode is enabled. Pausing backup agents does not pause a bulkdump or "
+				        "bulkload job; data distribution continues to dispatch it. Use `fdbcli bulkdump mode "
+				        "off` or `fdbcli bulkload mode off` to stop dispatch, which aborts in-flight tasks "
+				        "and, for bulkload, keeps the range lock held.\n",
+				        bulkDumpMode == 1 && bulkLoadMode == 1 ? "bulkdump and bulkload"
+				        : bulkDumpMode == 1                    ? "bulkdump"
+				                                               : "bulkload");
+			}
+		}
 	} catch (Error& e) {
 		if (e.code() == error_code_actor_cancelled)
 			throw;
