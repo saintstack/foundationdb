@@ -73,6 +73,10 @@ struct BulkDumping : TestWorkload {
 	int minTasksToProbe = 4;
 	int minOutstandingToProbe = 6;
 
+	// Exercise admission pacing: give the job a target end time and check it is actually spread.
+	bool testPacing = false;
+	double pacingTargetSeconds = 600.0;
+
 	// This workload is not compatible with following workload because they will race in changing the DD mode
 	// This workload is not compatible with RandomRangeLock for the conflict in range lock
 	void disableFailureInjectionWorkloads(std::set<std::string>& out) const override {
@@ -118,6 +122,8 @@ struct BulkDumping : TestWorkload {
 		dataKeyCount = getOption(options, "dataKeyCount"_sr, 1000);
 		minTasksToProbe = getOption(options, "minTasksToProbe"_sr, 4);
 		minOutstandingToProbe = getOption(options, "minOutstandingToProbe"_sr, 6);
+		testPacing = getOption(options, "testPacing"_sr, false);
+		pacingTargetSeconds = getOption(options, "pacingTargetSeconds"_sr, 600.0);
 	}
 
 	Future<Void> setup(Database const& cx) override { return _setup(this, cx); }
@@ -399,6 +405,44 @@ struct BulkDumping : TestWorkload {
 				co_return;
 			}
 			co_await delay(SERVER_KNOBS->DD_BULKDUMP_SCHEDULE_MIN_INTERVAL_SEC);
+		}
+	}
+
+	// Give the job a target end time and wait until it has enough tasks for pacing to mean anything.
+	//
+	// The target has to sit well above how long the job takes unpaced, or "it finished within the window"
+	// says nothing: an unpaced run would satisfy it too. The companion toml picks a target several times
+	// the unpaced duration measured on this configuration, and the elapsed time is asserted from below as
+	// well as above so that a run which ignored the target fails rather than passes early.
+	Future<Void> applyPacingTarget(BulkDumping* self, Database cx, UID jobId) {
+		co_await setBulkJobTargetEndTime(cx, jobId, now() + self->pacingTargetSeconds, /*isBulkDump=*/true);
+		TraceEvent("BulkDumpingPacingTargetSet")
+		    .detail("JobId", jobId)
+		    .detail("TargetSeconds", self->pacingTargetSeconds);
+
+		double waitStart = now();
+		while (true) {
+			if (now() - waitStart > self->pauseProbeTimeout) {
+				Optional<BulkDumpProgress> last = co_await getBulkDumpProgress(cx);
+				TraceEvent(SevError, "BulkDumpingPacingTooFewTasks")
+				    .detail("JobId", jobId)
+				    .detail("MinTasksRequired", self->minTasksToProbe)
+				    .detail("LastTotalTasks", last.present() ? last.get().totalTasks : -1);
+				co_return;
+			}
+			Optional<BulkDumpProgress> progress = co_await getBulkDumpProgress(cx);
+			if (!progress.present()) {
+				// Finished before it had enough tasks to pace, so this run proves nothing.
+				TraceEvent(SevError, "BulkDumpingPacingJobEndedBeforeProbe").detail("JobId", jobId);
+				co_return;
+			}
+			if (progress.get().totalTasks >= self->minTasksToProbe) {
+				TraceEvent("BulkDumpingPacingProbeReady")
+				    .detail("JobId", jobId)
+				    .detail("TotalTasks", progress.get().totalTasks);
+				co_return;
+			}
+			co_await delay(1.0);
 		}
 	}
 
@@ -756,7 +800,24 @@ struct BulkDumping : TestWorkload {
 		if (testPauseResume) {
 			co_await probePauseResume(this, cx, bulkDumpJob.getJobId());
 		}
+		double pacingStart = now();
+		if (testPacing) {
+			co_await applyPacingTarget(this, cx, bulkDumpJob.getJobId());
+		}
 		co_await waitUntilDumpJobComplete(this, cx);
+		if (testPacing) {
+			double elapsed = now() - pacingStart;
+			TraceEvent("BulkDumpingPacingMeasured")
+			    .detail("JobId", bulkDumpJob.getJobId())
+			    .detail("TargetSeconds", pacingTargetSeconds)
+			    .detail("ElapsedSeconds", elapsed)
+			    .detail("FractionOfTarget", elapsed / pacingTargetSeconds);
+			// Below: a job that ignored the target would finish in a fraction of the window, which is the
+			// regression this guards. Above: a job that merely stalled would also take a long time, so an
+			// upper bound keeps this a test of pacing rather than of slowness.
+			ASSERT(elapsed >= 0.5 * pacingTargetSeconds);
+			ASSERT(elapsed <= 2.0 * pacingTargetSeconds);
+		}
 		TraceEvent("BulkDumpingWorkLoad").detail("Phase", "Dump Job Complete").detail("Job", bulkDumpJob.toString());
 
 		co_return bulkDumpJob;
