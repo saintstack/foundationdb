@@ -3488,6 +3488,29 @@ Future<Void> setBulkJobPaused(Database cx, UID jobId, bool paused, bool isBulkDu
 	}
 }
 
+// Read-modify-write so that setting the target does not discard a pause a concurrent operator set.
+Future<Void> setBulkJobTargetEndTime(Database cx, UID jobId, double targetEndTime, bool isBulkDump) {
+	Transaction tr(cx);
+	while (true) {
+		Error err;
+		try {
+			tr.setOption(FDBTransactionOptions::LOCK_AWARE);
+			tr.setOption(FDBTransactionOptions::ACCESS_SYSTEM_KEYS);
+			Key controlKey = isBulkDump ? bulkDumpControlKeyFor(jobId) : bulkLoadControlKeyFor(jobId);
+			Optional<Value> value = co_await tr.get(controlKey);
+			BulkJobControlState controlState =
+			    value.present() ? decodeBulkJobControlState(value.get()) : BulkJobControlState();
+			controlState.targetEndTime = targetEndTime;
+			tr.set(controlKey, bulkJobControlStateValue(controlState));
+			co_await tr.commit();
+			co_return;
+		} catch (Error& e) {
+			err = e;
+		}
+		co_await tr.onError(err);
+	}
+}
+
 Future<BulkDumpTaskCounts> getBulkDumpTaskCounts(Database cx, KeyRange rangeToRead) {
 	Transaction tr(cx);
 	Key readBegin = rangeToRead.begin;

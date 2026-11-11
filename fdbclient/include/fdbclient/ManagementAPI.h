@@ -408,6 +408,7 @@ Future<Optional<BulkJobControlState>> getBulkJobControl(Database cx, UID jobId, 
 // Set the paused flag without discarding other control fields. The caller is responsible for checking
 // that the job exists: a record written for an unknown job id would never be read or cleaned up.
 Future<Void> setBulkJobPaused(Database cx, UID jobId, bool paused, bool isBulkDump);
+Future<Void> setBulkJobTargetEndTime(Database cx, UID jobId, double targetEndTime, bool isBulkDump);
 
 // ==================== End Progress Tracking ====================
 

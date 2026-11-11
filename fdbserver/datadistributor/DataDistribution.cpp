@@ -2830,6 +2830,10 @@ Future<Void> scheduleBulkDumpJob(Reference<DataDistributor> self) {
 	std::vector<Future<Void>> actors;
 	Transaction tr(cx);
 	bool pausedMidPass = false;
+	// Refreshed from progress only when it runs out, not per admission: progress is a scan of the job
+	// range, while the per-admission arithmetic below only needs a rough divisor and self-corrects as the
+	// estimate is renewed.
+	int tasksRemainingEstimate = 0;
 	while (beginKey < endKey && !pausedMidPass) {
 		Error err;
 		try {
@@ -2916,13 +2920,40 @@ Future<Void> scheduleBulkDumpJob(Reference<DataDistributor> self) {
 					// goes, so it can run for as long as the job does: a pause has to be read here, inside
 					// the dispatch loop and after the limiter wait, or it would not take effect until the
 					// job had finished. One point get per admitted shard task, against dumping a shard.
-					if (co_await bulkJobIsPaused(cx, jobId, /*isBulkDump=*/true)) {
+					Optional<BulkJobControlState> control = co_await getBulkJobControl(cx, jobId, /*isBulkDump=*/true);
+					if (control.present() && control.get().isPaused()) {
 						TraceEvent(SevInfo, "DDBulkDumpJobScheduleJobPaused", self->ddId)
 						    .suppressFor(60.0)
 						    .detail("JobId", jobId)
 						    .detail("NotAdmittedRange", taskRange);
 						pausedMidPass = true;
 						break;
+					}
+					// Spread admissions across the window the operator asked for. Delaying is the only
+					// lever available: this can hold a job back to the requested pace but cannot make the
+					// cluster finish sooner than it would unpaced, so a target already past just admits.
+					if (control.present() && control.get().hasTargetEndTime()) {
+						if (tasksRemainingEstimate <= 0) {
+							Optional<BulkDumpProgress> progress = co_await getBulkDumpProgress(cx);
+							tasksRemainingEstimate =
+							    progress.present()
+							        ? std::max(1, progress.get().totalTasks - progress.get().completeTasks)
+							        : 1;
+						}
+						double remainingSeconds = control.get().targetEndTime - now();
+						if (remainingSeconds > 0) {
+							double waitSeconds = remainingSeconds / tasksRemainingEstimate;
+							TraceEvent(bulkLoadVerboseEventSev(), "DDBulkDumpJobPacing", self->ddId)
+							    .detail("JobId", jobId)
+							    .detail("WaitSeconds", waitSeconds)
+							    .detail("RemainingSeconds", remainingSeconds)
+							    .detail("TasksRemainingEstimate", tasksRemainingEstimate);
+							co_await delay(waitSeconds);
+							// The pacing delay outlives the transaction's read window, and the next pass of
+							// the outer loop reads through it again.
+							tr.reset();
+						}
+						tasksRemainingEstimate--;
 					}
 					SSBulkDumpTask task = getSSBulkDumpTask(rangeLocations[rangeLocationIndex].servers,
 					                                        bulkDumpState.generateRangeTask(taskRange),
