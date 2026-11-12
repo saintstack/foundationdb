@@ -1552,6 +1552,8 @@ ACTOR static Future<Void> finishMoveKeys(Database occ,
 	state Key begin = keys.begin;
 	state Key endKey;
 	state FinishMoveRetryBudget retryBudget;
+	state int notReadyRetries = 0;
+	state int lastReadyCount = 0;
 	state FlowLock::Releaser releaser;
 
 	state std::unordered_set<UID> tssToIgnore;
@@ -1847,6 +1849,7 @@ ACTOR static Future<Void> finishMoveKeys(Database occ,
 					int count = dest.size() - newDestinations.size();
 					for (int s = 0; s < serverReady.size(); s++)
 						count += serverReady[s].isReady() && !serverReady[s].isError();
+					lastReadyCount = count;
 
 					int tssCount = 0;
 					for (int s = 0; s < tssReady.size(); s++)
@@ -1943,6 +1946,7 @@ ACTOR static Future<Void> finishMoveKeys(Database occ,
 
 						begin = endKey;
 						retryBudget.chunkCompleted();
+						notReadyRetries = 0;
 						break;
 					}
 					// Not all destination servers ready yet — no hard cap on retries.
@@ -1950,6 +1954,15 @@ ACTOR static Future<Void> finishMoveKeys(Database occ,
 					// and DD's logWarningAfter watchdog surfaces the situation if it
 					// persists. Bounding the retry count converts patient progress
 					// (e.g. a dest SS recovering after chaos) into a DD-stuck loop.
+					if (++notReadyRetries % 10 == 0) {
+						TraceEvent(
+						    SevWarnAlways, "RelocateShard_FinishMoveKeysDestNotReadyRetrying", relocationIntervalId)
+						    .detail("KeyBegin", keys.begin)
+						    .detail("KeyEnd", keys.end)
+						    .detail("Retries", notReadyRetries)
+						    .detail("ReadyCount", lastReadyCount)
+						    .detail("DestCount", dest.size());
+					}
 					tr.reset();
 				} catch (Error& error) {
 					txnAborted->increment(1);

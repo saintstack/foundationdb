@@ -2221,6 +2221,8 @@ public:
 
 	ACTOR static Future<Void> serverTeamRemover(DDTeamCollection* self) {
 		state int numServerTeamRemoved = 0;
+		state double gateStart = 0;
+		state double healthyGateEnd = 0;
 		loop {
 			// In case the serverTeamRemover cause problems in production, we can disable it
 			if (SERVER_KNOBS->TR_FLAG_DISABLE_SERVER_TEAM_REMOVER) {
@@ -2236,6 +2238,7 @@ public:
 			// To avoid removing server teams too fast, which is unlikely happen though
 			wait(delay(removeServerTeamDelay, TaskPriority::DataDistribution));
 
+			gateStart = now();
 			if (SERVER_KNOBS->PERPETUAL_WIGGLE_DISABLE_REMOVER && self->pauseWiggle) {
 				while (!self->pauseWiggle->get()) {
 					wait(self->pauseWiggle->onChange());
@@ -2243,9 +2246,18 @@ public:
 			} else {
 				wait(self->waitUntilHealthy(SERVER_KNOBS->TR_REMOVE_SERVER_TEAM_EXTRA_DELAY));
 			}
+			healthyGateEnd = now();
 			// Wait for the badTeamRemover() to avoid the potential race between
 			// adding the bad team (add the team tracker) and remove bad team (cancel the team tracker).
 			wait(self->badTeamRemover);
+			// Say which gate held the remover. WaitUntilHealthyStalled only fires when waitUntilHealthy is
+			// entered closed, so a remover parked on badTeamRemover is otherwise silent.
+			if (now() - gateStart > 60.0) {
+				TraceEvent("ServerTeamRemoverGateWaited", self->distributorId)
+				    .detail("Primary", self->primary)
+				    .detail("HealthyGateSeconds", healthyGateEnd - gateStart)
+				    .detail("BadTeamRemoverSeconds", now() - healthyGateEnd);
+			}
 
 			if (SERVER_KNOBS->TR_LOW_SPACE_PIVOT_DELAY_SEC > 0 &&
 			    self->teamPivots.pivotAvailableSpaceRatio < SERVER_KNOBS->TARGET_AVAILABLE_SPACE_RATIO) {
