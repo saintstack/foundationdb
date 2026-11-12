@@ -2226,6 +2226,7 @@ public:
 			// To avoid removing server teams too fast, which is unlikely happen though
 			co_await delay(removeServerTeamDelay, TaskPriority::DataDistribution);
 
+			const double gateStart = now();
 			if (SERVER_KNOBS->PERPETUAL_WIGGLE_DISABLE_REMOVER && self->pauseWiggle) {
 				while (!self->pauseWiggle->get()) {
 					co_await self->pauseWiggle->onChange();
@@ -2233,9 +2234,18 @@ public:
 			} else {
 				co_await self->waitUntilHealthy(SERVER_KNOBS->TR_REMOVE_SERVER_TEAM_EXTRA_DELAY);
 			}
+			const double healthyGateEnd = now();
 			// Wait for the badTeamRemover() to avoid the potential race between
 			// adding the bad team (add the team tracker) and remove bad team (cancel the team tracker).
 			co_await self->badTeamRemover;
+			// Say which gate held the remover. WaitUntilHealthyStalled only fires when waitUntilHealthy is
+			// entered closed, so a remover parked on badTeamRemover is otherwise silent.
+			if (now() - gateStart > 60.0) {
+				TraceEvent("ServerTeamRemoverGateWaited", self->distributorId)
+				    .detail("Primary", self->primary)
+				    .detail("HealthyGateSeconds", healthyGateEnd - gateStart)
+				    .detail("BadTeamRemoverSeconds", now() - healthyGateEnd);
+			}
 
 			if (SERVER_KNOBS->TR_LOW_SPACE_PIVOT_DELAY_SEC > 0 &&
 			    self->teamPivots.pivotAvailableSpaceRatio < SERVER_KNOBS->TARGET_AVAILABLE_SPACE_RATIO) {
