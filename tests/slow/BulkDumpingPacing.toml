@@ -61,7 +61,7 @@ max_trace_lines = 5000000
 
 # Force many small shards so the job has many tasks: a pause has to be observable with work still
 # outstanding, and 1000 keys in a handful of shards would leave no mid-flight window to pause in.
-min_shard_bytes = 1000
+min_shard_bytes = 500
 
 # Stop DD coalescing the small shards straight back together; paired with min_shard_bytes this is
 # the same recipe DDPipelineSaturation and ShardEncodeRollback use to force many small shards.
@@ -76,6 +76,7 @@ dd_bulkdump_parallelism = 1
 testTitle = 'BulkDumpingPacingWorkload'
 useDB = true
 waitForQuiescence = false
+timeout = 7200
 
     [[test.workload]]
     testName = 'BulkDumpingWorkload'
@@ -92,9 +93,12 @@ waitForQuiescence = false
     pacingTargetSeconds = 600.0
 
     # Pacing is only meaningful with several tasks to spread; same bar and dataset as the pause test.
-    dataKeyCount = 60000
+    # Same sizing as the pause test: enough shards that the job cannot finish inside the probe window,
+    # so the precondition holds by construction rather than by luck.
+    dataKeyCount = 150000
     minTasksToProbe = 8
-    pauseProbeTimeout = 900.0
+    minOutstandingToProbe = 6
+    pauseProbeTimeout = 1800.0
     targetFullKeyspace = true
 
     # Leave room for a 600s paced dump inside the completion wait.

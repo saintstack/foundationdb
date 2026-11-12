@@ -812,11 +812,16 @@ struct BulkDumping : TestWorkload {
 			    .detail("TargetSeconds", pacingTargetSeconds)
 			    .detail("ElapsedSeconds", elapsed)
 			    .detail("FractionOfTarget", elapsed / pacingTargetSeconds);
-			// Below: a job that ignored the target would finish in a fraction of the window, which is the
-			// regression this guards. Above: a job that merely stalled would also take a long time, so an
-			// upper bound keeps this a test of pacing rather than of slowness.
+			// A job that ignored the target finishes in a fraction of the window, so the lower bound is
+			// what detects the regression. There is deliberately no upper bound: fault injection only
+			// ever makes a run slower, so a ceiling fails on a slow-but-correct run -- it did, on Joshua
+			// seed 2778683794.
+			//
+			// The cost is that this cannot tell a paced job from a merely slow one. Checking that the
+			// pacing code computed delays would settle it, but those decisions are only visible as trace
+			// events on the data distributor and a workload cannot read another process's traces, so the
+			// distinction is not covered here.
 			ASSERT(elapsed >= 0.5 * pacingTargetSeconds);
-			ASSERT(elapsed <= 2.0 * pacingTargetSeconds);
 		}
 		TraceEvent("BulkDumpingWorkLoad").detail("Phase", "Dump Job Complete").detail("Job", bulkDumpJob.toString());
 
