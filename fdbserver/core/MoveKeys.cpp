@@ -1998,6 +1998,15 @@ static Future<Void> finishMoveKeys(Database occ,
 						    .detail("DestCount", decoded->dest.size());
 						throw finish_move_keys_too_many_retries();
 					}
+					if (retryBudget.attempts() % 10 == 0) {
+						TraceEvent(
+						    SevWarnAlways, "RelocateShard_FinishMoveKeysDestNotReadyRetrying", relocationIntervalId)
+						    .detail("KeyBegin", keys.begin)
+						    .detail("KeyEnd", keys.end)
+						    .detail("Retries", retryBudget.attempts())
+						    .detail("ReadyCount", count)
+						    .detail("DestCount", decoded->dest.size());
+					}
 					co_await delay(finishMoveKeysBackoff(retryBudget.attempts()));
 					tr.reset();
 					continue;
