@@ -374,6 +374,8 @@ public:
 
 	int getUnhealthyRelocationCount() const override;
 
+	void processRelocationComplete(const RelocateData& done);
+
 	Future<SrcDestTeamPair> getSrcDestTeams(const int& teamCollectionIndex,
 	                                        const GetTeamRequest& srcReq,
 	                                        const GetTeamRequest& destReq,
