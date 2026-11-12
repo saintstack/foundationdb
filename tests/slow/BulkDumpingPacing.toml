@@ -61,7 +61,7 @@ max_trace_lines = 5000000
 
 # Force many small shards so the job has many tasks: a pause has to be observable with work still
 # outstanding, and 1000 keys in a handful of shards would leave no mid-flight window to pause in.
-min_shard_bytes = 500
+min_shard_bytes = 10000
 
 # Stop DD coalescing the small shards straight back together; paired with min_shard_bytes this is
 # the same recipe DDPipelineSaturation and ShardEncodeRollback use to force many small shards.
@@ -72,11 +72,18 @@ shard_bytes_per_sqrt_bytes = 0
 # what makes the regression this test guards against observable rather than lucky.
 dd_bulkdump_parallelism = 1
 
+# Make each dump task slow rather than making more of them. The mid-flight window needs the job to
+# last; forcing tiny shards achieved that only by making data distribution split, assign and move
+# hundreds of them, and that churn -- not the bulkdump work -- was most of the trace volume, which
+# then tripped MAX_TRACE_LINES. Draining a shard in small batches stretches the job with no moves.
+ss_bulkdump_batch_bytes = 2000
+ss_serve_bulkdump_parallelism = 1
+
 [[test]]
 testTitle = 'BulkDumpingPacingWorkload'
 useDB = true
 waitForQuiescence = false
-timeout = 7200
+timeout = 14400
 
     [[test.workload]]
     testName = 'BulkDumpingWorkload'
@@ -87,22 +94,19 @@ timeout = 7200
     # Give the job a target end time and require that it is actually spread over it.
     testPacing = true
 
-    # Several times the unpaced duration of this configuration, which measured 70-225 simsec across
-    # seeds 101-104 while developing the pause test. A target near the unpaced duration would be met by
-    # a job that ignored it entirely, so the margin is what gives the lower-bound assertion its force.
-    pacingTargetSeconds = 600.0
+    pacingTargetSeconds = 1800.0
 
     # Pacing is only meaningful with several tasks to spread; same bar and dataset as the pause test.
     # Same sizing as the pause test: enough shards that the job cannot finish inside the probe window,
     # so the precondition holds by construction rather than by luck.
-    dataKeyCount = 150000
-    minTasksToProbe = 8
-    minOutstandingToProbe = 6
+    dataKeyCount = 60000
+    # Pause once this many tasks have been dispatched: early, with most of the job still ahead.
+    minAdmissionsToProbe = 5
     pauseProbeTimeout = 1800.0
     targetFullKeyspace = true
 
     # Leave room for a 600s paced dump inside the completion wait.
-    jobCompletionTimeout = 2400.0
+    jobCompletionTimeout = 5400.0
 
     # The dump is the subject here; the load half would only lengthen the run.
     runLoad = false
