@@ -2942,7 +2942,14 @@ Future<Void> scheduleBulkDumpJob(Reference<DataDistributor> self) {
 						}
 						double remainingSeconds = control.get().targetEndTime - now();
 						if (remainingSeconds > 0) {
-							double waitSeconds = remainingSeconds / tasksRemainingEstimate;
+							// Cap a single wait. The estimate comes from progress, which early in a job
+							// reports almost nothing because partitioning has barely started, so dividing
+							// by it yielded the whole remaining window: one task was dispatched and the job
+							// then stalled until the target expired. A cap bounds the damage from any bad
+							// estimate rather than only from that one, and costs nothing once the estimate
+							// is sound, since the waits are short by then.
+							double waitSeconds = std::min(remainingSeconds / tasksRemainingEstimate,
+							                              SERVER_KNOBS->DD_BULKDUMP_SCHEDULE_MIN_INTERVAL_SEC * 4);
 							TraceEvent(bulkLoadVerboseEventSev(), "DDBulkDumpJobPacing", self->ddId)
 							    .detail("JobId", jobId)
 							    .detail("WaitSeconds", waitSeconds)
